@@ -1,0 +1,284 @@
+import AgoraRTC, { type ILocalAudioTrack, type ILocalVideoTrack, type IRemoteVideoTrack, type UID } from 'agora-rtc-sdk-ng';
+import { captureScreen, type CapturedScreen } from './capture';
+import { defaults, normalizePreferences, type Preferences } from './preferences';
+import { SourceController } from './source-controller';
+import type { Participant, Room } from './types';
+
+export interface RoomState {
+  view: 'welcome' | 'lobby' | 'room';
+  name: string;
+  configured: boolean;
+  ready: boolean;
+  busy: boolean;
+  rooms: Room[];
+  room?: Room;
+  members: Participant[];
+  uid?: number;
+  selected?: UID;
+  connected: boolean;
+  connecting: boolean;
+  sharing: boolean;
+  video?: ILocalVideoTrack | IRemoteVideoTrack;
+  connection: string;
+  caption: string;
+  notice?: { message: string; error: boolean };
+  preferences: Preferences;
+}
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+export function errorText(error: unknown) {
+  const e = error as { code?: string; name?: string; message?: string };
+  if (e.code === 'PERMISSION_DENIED' || /NotAllowed|cancel|permission denied/i.test(e.message || '')) return '未获得共享权限，请重新选择要分享的画面。';
+  if (e.name === 'TimeoutError') return '请求超时，请检查网络或稍后重试。';
+  return e.message || '连接失败，请稍后重试。';
+}
+async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
+  const response = await fetch(url, { method: method || (body === undefined ? 'GET' : 'POST'),
+    headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+    body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000) });
+  const data = await response.json();
+  if (!response.ok) throw new ApiError(data.error || '请求失败，请稍后重试。', response.status);
+  return data;
+}
+export const inviteUrl = (room: Room) => `${location.origin}/#room=${room.id}`;
+
+/** Agora owns transport. Piik components consume this store through React. */
+export function createRoomService() {
+  let preferences = { ...defaults }, name = '';
+  try { preferences = normalizePreferences(JSON.parse(localStorage.getItem('screen-preferences') || '{}')); name = localStorage.getItem('screen-display-name') || ''; } catch { /* optional storage */ }
+  let state: RoomState = { view:'welcome', name, configured:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences };
+  const listeners = new Set<() => void>();
+  const client = AgoraRTC.createClient({ mode:'rtc', codec:'vp8' });
+  AgoraRTC.setLogLevel(3);
+  let joined = false, confirmed = false, attempt = 0, revision = 0, listRevision = 0;
+  let sessionKey: string | undefined;
+  let participants: Participant[] = [];
+  let tracks: (ILocalAudioTrack | ILocalVideoTrack)[] = [];
+  let capture: CapturedScreen | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let heartbeatPending = false, renewing = false;
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  function members(): Participant[] {
+    if (!joined || state.uid === undefined) return [];
+    const known = new Map(participants.map(person => [person.uid, person]));
+    const result: Participant[] = [{ uid:state.uid, name:state.name, sharing:tracks.length > 0, isOwner:!!state.room?.isOwner }];
+    for (const uid of new Set([...known.keys(), ...client.remoteUsers.map(user => Number(user.uid))])) {
+      if (uid === state.uid) continue;
+      const remote = client.remoteUsers.find(user => user.uid === uid);
+      result.push({ uid, name:known.get(uid)?.name || `成员 ${uid}`, sharing:remote ? remote.hasVideo : known.get(uid)?.sharing || false, isOwner:known.get(uid)?.isOwner || false });
+    }
+    return result;
+  }
+  function emit(patch: Partial<RoomState> = {}) {
+    state = { ...state, ...patch };
+    state = { ...state, members:members(), selected:source.selected, sharing:tracks.length > 0 };
+    listeners.forEach(listener => listener());
+  }
+  function notify(message: string, error = false) {
+    clearTimeout(noticeTimer); emit({ notice:{ message, error } });
+    noticeTimer = setTimeout(() => emit({ notice:undefined }), 9000);
+  }
+  const source = new SourceController({ client,
+    remote:uid => client.remoteUsers.find(user => user.uid === uid),
+    video:video => emit({ video }), empty:() => emit({ video:undefined }),
+    error:error => notify(`切换画面失败：${errorText(error)}`, true),
+  });
+  source.setAudio(preferences.volume, preferences.muted);
+  async function run(action: () => Promise<void>): Promise<boolean> {
+    if (state.busy) return false;
+    emit({ busy:true });
+    try { await action(); return true; }
+    catch (error) { notify(errorText(error), true); return false; }
+    finally { emit({ busy:false }); }
+  }
+  async function select(uid?: UID) {
+    if (!state.connected && uid !== undefined) { notify('媒体正在连接，连接成功后即可观看。'); return; }
+    const pending = source.select(uid); emit(); await pending; emit();
+  }
+  function fallback() { void select(members().find(person => person.uid !== source.selected && person.sharing)?.uid); }
+  async function token() {
+    if (!state.room) throw new Error('请先选择房间。');
+    const result = await api<{ appId:string; token:string; uid:number; sessionKey:string; room:Room; displayName:string }>(`/api/rooms/${state.room.id}/token`, { sessionKey });
+    sessionKey = result.sessionKey;
+    emit({ uid:result.uid, room:result.room, name:result.displayName });
+    return result;
+  }
+  async function heartbeat() {
+    if (!joined || !state.room || !sessionKey || heartbeatPending) return;
+    const id = state.room.id, key = sessionKey, version = revision;
+    heartbeatPending = true;
+    try {
+      const result = await api<{ participants:Participant[]; room:Room }>(`/api/rooms/${id}/presence`, { sessionKey:key, sharing:tracks.length > 0 });
+      if (version !== revision || key !== sessionKey) return;
+      participants = result.participants; emit({ room:result.room });
+    } catch (error) {
+      if (version === revision && key === sessionKey && error instanceof ApiError && [403,404].includes(error.status)) {
+        notify(errorText(error), true); await leave(); await refreshRooms();
+      }
+    } finally { heartbeatPending = false; }
+  }
+  async function connectMedia(initial?: Awaited<ReturnType<typeof token>>) {
+    if (!joined || state.connecting) return;
+    const current = ++attempt;
+    emit({ connecting:true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = initial || await token();
+      if (current !== attempt || !joined) return;
+      await Promise.race([client.join(result.appId, state.room!.id, result.token, result.uid), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('声网连接超时，请检查网络后重试。')), 25000);
+      })]);
+      if (current !== attempt || !joined) return;
+      emit({ connected:true });
+      const first = source.selected ?? client.remoteUsers.find(user => user.hasVideo)?.uid;
+      if (first !== undefined) void select(first);
+    } catch (error) {
+      if (current !== attempt) return;
+      await source.select(undefined); await client.leave().catch(() => {});
+      emit({ connected:false }); throw error;
+    } finally { clearTimeout(timer); if (current === attempt) emit({ connecting:false }); }
+  }
+  async function stop(switchSource = true) {
+    const old = tracks; tracks = [];
+    if (state.uid !== undefined) source.setLocal(state.uid);
+    if (source.selected === state.uid) await source.select(switchSource ? members().find(person => person.uid !== state.uid && person.sharing)?.uid : undefined);
+    if (old.length) {
+      try { if (state.connected) await client.unpublish(old); } catch { /* release capture anyway */ }
+      if (capture) capture.close(); else old.forEach(track => { track.stop(); track.close(); });
+      capture = undefined;
+    }
+    emit({ caption:'你的共享已停止，其他成员的共享继续进行。' });
+    if (switchSource) void heartbeat();
+  }
+  async function leave() {
+    attempt++; revision++; clearInterval(heartbeatTimer); heartbeatTimer = undefined;
+    const room = state.room, key = sessionKey;
+    await stop(false); await source.select(undefined);
+    try { await client.leave(); }
+    finally {
+      joined = false; participants = []; sessionKey = undefined;
+      if (room && key) await api(`/api/rooms/${room.id}/leave`, { sessionKey:key }).catch(() => {});
+      history.replaceState(null, '', '/');
+      emit({ view:'lobby', room:undefined, uid:undefined, video:undefined, connected:false, connecting:false });
+    }
+  }
+  async function enter(room: Room) {
+    if (!confirmed || (joined && state.room?.id === room.id)) return;
+    if (joined) await leave();
+    emit({ room });
+    try {
+      const result = await token(); joined = true; revision++; participants = [];
+      emit({ view:'room', caption:'选择成员可切换观看，你自己的共享会继续。' });
+      history.replaceState(null, '', `/#room=${room.id}`);
+      await heartbeat();
+      if (!joined) return;
+      heartbeatTimer = setInterval(() => void heartbeat(), 12000);
+      void connectMedia(result).catch(error => notify(`已进入房间，${errorText(error)}`, true));
+    } catch (error) { emit({ view:'lobby', room:undefined }); throw error; }
+  }
+  async function refreshRooms() {
+    if (!confirmed) return;
+    const current = ++listRevision;
+    const result = await api<{ rooms:Room[] }>('/api/rooms');
+    if (current !== listRevision) return;
+    const active = result.rooms.find(room => room.id === state.room?.id);
+    if (state.room && !active && !state.busy) { await leave(); notify('房间已关闭，请选择其他房间。'); }
+    emit({ rooms:result.rooms, ...(active ? { room:active } : {}) });
+  }
+  async function share() {
+    if (!state.connected) { await connectMedia(); return; }
+    if (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
+    const next = await captureScreen(state.preferences, AgoraRTC);
+    const video = next.tracks[0] as ILocalVideoTrack;
+    let ended = false;
+    next.onEnded(() => { ended = true; if (tracks.includes(video)) void stop(); });
+    try {
+      await client.publish(next.tracks);
+      if (ended || !joined) { await client.unpublish(next.tracks).catch(() => {}); throw new Error('共享已停止，请重新选择。'); }
+      tracks = next.tracks; capture = next; source.setLocal(state.uid!, video);
+      await source.select(state.uid);
+      const audio = next.surface === 'monitor' ? '系统' : next.surface === 'window' ? '窗口' : '标签页';
+      emit({ caption:`${state.preferences.resolution}p · ${state.preferences.fps} fps · ${next.hasAudio ? `含${audio}音频` : '仅画面'}，切换观看会保留你的共享。` });
+      if (state.preferences.audio && !next.hasAudio) notify(`未获得${audio}音轨，本次仅共享画面。请在浏览器选择器中勾选共享音频。`);
+      void heartbeat();
+    } catch (error) { next.close(); throw error; }
+  }
+  client.on('connection-state-change', connection => {
+    emit({ connection:({ CONNECTED:'声网已连接', CONNECTING:'正在连接声网…', RECONNECTING:'正在重连…', DISCONNECTING:'正在断开…', DISCONNECTED:'媒体未连接' })[connection], ...(connection === 'DISCONNECTED' ? { connected:false } : {}) });
+  });
+  client.on('user-joined', () => { emit(); void heartbeat(); });
+  client.on('user-published', (user, kind) => {
+    if (kind !== 'video' && kind !== 'audio') return;
+    if (source.selected === user.uid || (kind === 'video' && source.selected === undefined)) void select(user.uid);
+    emit(); void heartbeat();
+  });
+  client.on('user-unpublished', (user, kind) => {
+    if (source.selected === user.uid) { if (kind === 'video') fallback(); else void select(user.uid); }
+    emit();
+  });
+  client.on('user-left', user => { if (source.selected === user.uid) fallback(); emit(); void heartbeat(); });
+  async function renew() {
+    if (!joined || renewing) return; renewing = true;
+    try { await client.renewToken((await token()).token); }
+    catch (error) { notify(`续期失败：${errorText(error)}`, true); await leave(); }
+    finally { renewing = false; }
+  }
+  client.on('token-privilege-will-expire', () => void renew());
+  client.on('token-privilege-did-expire', () => void renew());
+  AgoraRTC.onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
+  const listTimer = setInterval(() => { if (confirmed && !state.busy && !document.hidden) void refreshRooms().catch(() => {}); }, 15000);
+  window.addEventListener('pagehide', () => {
+    clearInterval(listTimer); clearInterval(heartbeatTimer); capture?.close();
+    if (state.room && sessionKey) navigator.sendBeacon(`/api/rooms/${state.room.id}/leave`, new Blob([JSON.stringify({ sessionKey })], { type:'application/json' }));
+    void client.leave();
+  });
+  return {
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    getSnapshot:() => state,
+    async initialize() {
+      try { emit({ configured:(await api<{configured:boolean}>('/api/config')).configured }); }
+      catch (error) { notify(errorText(error), true); }
+      finally { emit({ ready:true }); }
+    },
+    confirmName:(value: string) => run(async () => {
+      const profile = await api<{name:string}>('/api/profile', { name:value.trim().slice(0,24) });
+      confirmed = true; emit({ name:profile.name, view:'lobby' });
+      try { localStorage.setItem('screen-display-name', profile.name); } catch { /* optional storage */ }
+      await refreshRooms();
+      const id = new URLSearchParams(location.hash.slice(1)).get('room');
+      if (id && /^[a-f0-9]{12}$/.test(id)) await enter(await api<Room>(`/api/rooms/${id}`));
+    }),
+    join:(room:Room) => run(() => enter(room)),
+    joinInvite:(value:string) => run(async () => {
+      const url = new URL(value), id = new URLSearchParams(url.hash.slice(1)).get('room');
+      if (url.origin !== location.origin || !/^[a-f0-9]{12}$/.test(id || '')) throw new Error('请使用本站生成的完整邀请链接。');
+      await enter(await api<Room>(`/api/rooms/${id}`));
+    }),
+    saveRoom:(fields:{name:string;description:string}, room?:Room) => run(async () => {
+      const saved = await api<Room>(room ? `/api/rooms/${room.id}` : '/api/rooms', fields, room ? 'PATCH' : 'POST');
+      if (room) emit({ room:saved }); else await enter(saved);
+      await refreshRooms();
+    }),
+    removeRoom:(room:Room) => run(async () => {
+      if (state.room?.id === room.id) await leave();
+      await api(`/api/rooms/${room.id}`, {}, 'DELETE'); await refreshRooms();
+    }),
+    leave:() => run(async () => { await leave(); await refreshRooms(); }),
+    changeName:() => run(async () => { if (joined) await leave(); confirmed = false; emit({ view:'welcome' }); }),
+    share:() => run(share), stop:() => run(() => stop()), select,
+    savePreferences(value:Preferences) {
+      const preferences = normalizePreferences(value);
+      source.setAudio(preferences.volume, preferences.muted);
+      try { localStorage.setItem('screen-preferences', JSON.stringify(preferences)); } catch { /* optional storage */ }
+      emit({ preferences });
+    },
+    async copyInvite() {
+      if (!state.room) return;
+      try { await navigator.clipboard.writeText(inviteUrl(state.room)); notify('房间邀请链接已复制。'); }
+      catch { notify('无法自动复制，请从房间信息中手动复制邀请链接。', true); }
+    },
+    dismissNotice:() => emit({ notice:undefined }),
+  };
+}
+export type RoomService = ReturnType<typeof createRoomService>;

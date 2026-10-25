@@ -1,0 +1,14 @@
+@import "../../../../site/assets/brand-motion.css";
+
+.lr-brand-mark {
+  display: block;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+.lr-brand-loader {
+  display: grid;
+  width: 88px;
+  height: 88px;
+  place-items: center;
+  color: currentColor;
+}
