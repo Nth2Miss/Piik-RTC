@@ -12,3 +12,11 @@ data/
 .idea/
 .DS_Store
 Thumbs.db
+desktop/bin/
+desktop/native/**/bin/
+desktop/native/**/obj/
+release/
+desktop/PiikDesktop/bin/
+desktop/PiikDesktop/obj/
+desktop/PiikDesktop/Resources/PiikAudio.exe.gz
+desktop/PiikDesktop/FodyWeavers.xsd
