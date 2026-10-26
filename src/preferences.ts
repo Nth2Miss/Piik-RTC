@@ -3,7 +3,7 @@ import type { ScreenVideoTrackInitConfig, VideoEncoderConfiguration } from 'agor
 export interface Preferences {
   resolution: '480' | '720' | '1080' | '1440';
   fps: 15 | 24 | 30 | 60;
-  bitrate: 1000 | 2000 | 3000 | 5000 | 8000;
+  bitrate: 1000 | 2000 | 3000 | 5000 | 8000 | 12000 | 16000;
   optimization: 'detail' | 'motion' | 'balanced';
   audio: boolean;
   includeSelf: boolean;
@@ -23,7 +23,7 @@ export function normalizePreferences(value: unknown): Preferences {
   return {
     resolution: ['480', '720', '1080', '1440'].includes(String(v.resolution)) ? String(v.resolution) as Preferences['resolution'] : defaults.resolution,
     fps: [15, 24, 30, 60].includes(Number(v.fps)) ? Number(v.fps) as Preferences['fps'] : defaults.fps,
-    bitrate: [1000, 2000, 3000, 5000, 8000].includes(Number(v.bitrate)) ? Number(v.bitrate) as Preferences['bitrate'] : defaults.bitrate,
+    bitrate: [1000, 2000, 3000, 5000, 8000, 12000, 16000].includes(Number(v.bitrate)) ? Number(v.bitrate) as Preferences['bitrate'] : defaults.bitrate,
     optimization: ['detail', 'motion', 'balanced'].includes(String(v.optimization)) ? v.optimization as Preferences['optimization'] : defaults.optimization,
     audio: typeof v.audio === 'boolean' ? v.audio : defaults.audio,
     includeSelf: typeof v.includeSelf === 'boolean' ? v.includeSelf : defaults.includeSelf,
