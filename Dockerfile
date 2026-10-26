@@ -1,18 +1,20 @@
-# ---- 构建阶段：安装全部依赖并生成前端静态文件 ----
+# ---- 构建阶段：安装依赖、生成前端静态文件，并裁剪为生产依赖 ----
 FROM node:24-alpine AS build
 WORKDIR /app
+# 小内存服务器上限制 V8 堆，避免 Rollup 构建时触发 OOM / 长时间 swap
+ENV NODE_OPTIONS=--max-old-space-size=1024
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html tsconfig.json ./
 COPY src ./src
-RUN npm run build
+RUN npm run build && npm prune --omit=dev
 
-# ---- 运行阶段：只保留生产依赖、构建产物与服务端代码 ----
+# ---- 运行阶段：直接复用构建阶段裁剪后的依赖，不再重复安装 ----
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /app/package.json ./
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY server ./server
 # SQLite 数据目录由非 root 的 node 用户写入
