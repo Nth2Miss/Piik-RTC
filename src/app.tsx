@@ -72,6 +72,17 @@ function Lobby({ state, service, create, join, remove }: { state:RoomState; serv
 }
 function VideoSurface({ state, paused }: { state:RoomState; paused:boolean }) {
   const ref = useRef<HTMLDivElement>(null);
+  const pausedRef = useRef(paused);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+  useEffect(() => {
+    const container = ref.current;
+    if (!container) return;
+    // Agora's Chromium player calls play() from its own pause handler, so a plain
+    // video.pause() is immediately undone. Hold the event back while paused here.
+    const holdPause = (event: Event) => { if (pausedRef.current) event.stopPropagation(); };
+    container.addEventListener('pause', holdPause, true);
+    return () => container.removeEventListener('pause', holdPause, true);
+  }, []);
   useEffect(() => { if (!ref.current || !state.video) return; state.video.play(ref.current, { fit:state.preferences.fit, mirror:false }); return () => { state.video?.stop(); }; }, [state.video, state.preferences.fit]);
   useEffect(() => {
     const video = ref.current?.querySelector('video');
@@ -85,7 +96,7 @@ function RoomPage({ state, service, settings, edit, members, connection }: { sta
   const [paused, setPaused] = useState(false);
   const [fullscreenView, setFullscreenView] = useState(false);
   const [pipView, setPipView] = useState(false);
-  useEffect(() => { setPaused(false); }, [state.video]);
+  useEffect(() => { setPaused(false); service.setPlaybackPaused(false); }, [state.video, service]);
   useEffect(() => {
     const syncFullscreen = () => setFullscreenView(!!document.fullscreenElement);
     const syncPip = () => setPipView(!!document.pictureInPictureElement);
@@ -116,8 +127,8 @@ function RoomPage({ state, service, settings, edit, members, connection }: { sta
   return <main className="lr-room sw-room"><div className="sw-room-heading"><div><h1>{state.room?.name}</h1><p>{state.room?.description || '每个人都可以分享，点击成员切换观看。'}</p></div><span className="sw-count">{state.members.length} 人在线 · {state.members.filter(person => person.sharing).length} 路共享</span></div>
     <div className="lr-scene"><StageTv label="共享画面" live={!!state.video} indicator={<span className={`sw-tv-lamp${state.connected ? ' is-live' : ''}`} aria-label={state.connection}/>}>
       <VideoSurface state={state} paused={paused}/>{!state.video && <StageOverlay icon={state.connecting ? 'loader' : 'tv'} comic={state.connecting ? 'signal-connecting' : 'waiting-for-host'} waiting={state.connecting} message={state.connecting ? '正在连接声网…' : selected ? `${selected.name} 暂未共享画面` : '等待大家分享画面'}/>}
-      <div className="sw-playback"><span className="sw-watching">{state.video ? `正在观看 · ${selected?.name || '共享画面'}${state.selected === state.uid ? '（你）' : ''}` : '选择下方成员，切换共享画面'}</span><div className="sw-playback-tools">
-        <Btn icon={paused ? 'play' : 'pause'} title={paused ? 'playback.play' : 'playback.pause'} size="dense" quiet disabled={!state.video} onClick={() => setPaused(value => !value)}/>
+      <div className="sw-playback"><span className="sw-watching">{state.video ? `${paused ? '已暂停' : '正在观看'} · ${selected?.name || '共享画面'}${state.selected === state.uid ? '（你）' : ''}` : '选择下方成员，切换共享画面'}</span><div className="sw-playback-tools">
+        <Btn icon={paused ? 'play' : 'pause'} title={paused ? 'playback.play' : 'playback.pause'} size="dense" quiet pressed={paused} disabled={!state.video} onClick={() => { const next = !paused; setPaused(next); service.setPlaybackPaused(next); }}/>
         <Btn icon={state.preferences.muted ? 'speakerOff' : 'speaker'} title={state.preferences.muted ? 'playback.unmute' : 'playback.mute'} size="dense" quiet onClick={() => service.savePreferences({ ...state.preferences,muted:!state.preferences.muted })}/>
         <label className="sw-volume"><input type="range" min={0} max={100} value={state.preferences.volume} onChange={event => service.savePreferences({ ...state.preferences,volume:Number(event.target.value) })} aria-label={t('playback.volumeBasic')}/></label>
         <span className="sw-playback-sep" aria-hidden="true"/>

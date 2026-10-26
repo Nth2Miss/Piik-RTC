@@ -420,7 +420,7 @@ export function createRoomService() {
   async function leave() {
     closeSocket();
     attempt++; revision++; clearInterval(heartbeatTimer); heartbeatTimer = undefined;
-    cancelIdleDisconnect(); mediaIdle = false;
+    cancelIdleDisconnect(); mediaIdle = false; source.setPaused(false);
     const room = state.room, key = sessionKey;
     await stop(false); await source.select(undefined);
     cancelIdleDisconnect();
@@ -570,6 +570,7 @@ export function createRoomService() {
     leave:() => run(async () => { await leave(); await refreshRooms(); }),
     changeName:() => run(async () => { if (joined) await leave(); confirmed = false; emit({ view:'welcome' }); }),
     share:() => run(share), stop:() => run(() => stop()), select,
+    setPlaybackPaused: (paused: boolean) => source.setPaused(paused),
     savePreferences(value:Preferences) {
       const preferences = normalizePreferences(value);
       source.setAudio(preferences.volume, preferences.muted);

@@ -19,11 +19,17 @@ export class SourceController {
   private chain: Promise<void> = Promise.resolve();
   private volume = 80;
   private muted = false;
+  private paused = false;
   constructor(options: Options) { this.options = options; }
   setLocal(uid: UID, track?: ILocalVideoTrack) { this.local = track ? { uid, track } : undefined; }
   setAudio(volume: number, muted: boolean) {
-    this.volume = volume; this.muted = muted;
-    this.subscribed?.audioTrack?.setVolume(muted ? 0 : volume);
+    this.volume = volume; this.muted = muted; this.applyAudio();
+  }
+  setPaused(paused: boolean) {
+    this.paused = paused; this.applyAudio();
+  }
+  private applyAudio() {
+    this.subscribed?.audioTrack?.setVolume(this.paused || this.muted ? 0 : this.volume);
   }
   private async subscribe(user: IAgoraRTCRemoteUser, media: 'video' | 'audio') {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -62,7 +68,7 @@ export class SourceController {
         try {
           await this.subscribe(user, 'audio');
           if (revision !== this.revision) return;
-          user.audioTrack?.setVolume(this.muted ? 0 : this.volume);
+          user.audioTrack?.setVolume(this.paused || this.muted ? 0 : this.volume);
           user.audioTrack?.play();
         } catch (error) { if (revision === this.revision) this.options.error(error); }
       }

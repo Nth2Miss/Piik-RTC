@@ -48,6 +48,30 @@ test('rapid switching cannot play a stale asynchronous subscription', async () =
   controller.setAudio(0, true);
   assert.ok(log.includes('volume:a2:0'));
 });
+test('local pause silences remote audio and resumes at the current volume', async () => {
+  const { log, controller } = setup();
+  await controller.select(1);
+  controller.setPaused(true);
+  assert.equal(log.at(-1), 'volume:a1:0');
+  controller.setPaused(false);
+  assert.equal(log.at(-1), 'volume:a1:80');
+  controller.setPaused(true);
+  controller.setAudio(60, false);
+  assert.equal(log.at(-1), 'volume:a1:0');
+  controller.setPaused(false);
+  assert.equal(log.at(-1), 'volume:a1:60');
+  controller.setPaused(true);
+  await controller.select(2);
+  assert.ok(log.includes('volume:a2:0'));
+  controller.setPaused(false);
+  assert.equal(log.at(-1), 'volume:a2:60');
+});
+test('accepts the 12 and 16 Mbps bitrate tiers', () => {
+  assert.equal(normalizePreferences({ ...defaults, bitrate: 12000 }).bitrate, 12000);
+  assert.equal(normalizePreferences({ ...defaults, bitrate: 16000 }).bitrate, 16000);
+  assert.equal(captureConfig({ ...defaults, bitrate: 16000 }).encoderConfig.bitrateMax, 16000);
+  assert.equal(normalizePreferences({ ...defaults, bitrate: 11000 }).bitrate, defaults.bitrate);
+});
 test('invalid persisted settings are bounded; presets produce SDK capture configuration', () => {
   const bad = normalizePreferences({ volume: Infinity, fps: 999, resolution: '<script>', bitrate: -1, optimization: 'invalid', audio: 'false' });
   assert.deepEqual(bad, defaults);
