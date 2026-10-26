@@ -10,8 +10,9 @@ export interface Preferences {
   volume: number;
   muted: boolean;
   fit: 'contain' | 'cover' | 'fill';
+  wide: boolean;
 }
-export const defaults: Preferences = { resolution: '1080', fps: 30, bitrate: 3000, optimization: 'detail', audio: true, includeSelf: false, volume: 80, muted: false, fit: 'contain' };
+export const defaults: Preferences = { resolution: '1080', fps: 30, bitrate: 3000, optimization: 'detail', audio: true, includeSelf: false, volume: 80, muted: false, fit: 'contain', wide: false };
 export const presets: Record<string, Partial<Preferences>> = {
   document: { resolution: '1080', fps: 15, bitrate: 3000, optimization: 'detail' },
   movie: { resolution: '1080', fps: 30, bitrate: 5000, optimization: 'motion' },
@@ -30,6 +31,7 @@ export function normalizePreferences(value: unknown): Preferences {
     volume: typeof v.volume === 'number' && Number.isFinite(v.volume) ? Math.round(Math.max(0, Math.min(100, v.volume))) : defaults.volume,
     muted: typeof v.muted === 'boolean' ? v.muted : defaults.muted,
     fit: v.fit === 'cover' || v.fit === 'fill' ? v.fit : 'contain',
+    wide: typeof v.wide === 'boolean' ? v.wide : defaults.wide,
   };
 }
 export function encoderConfig(p: Preferences): VideoEncoderConfiguration {

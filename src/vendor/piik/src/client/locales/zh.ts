@@ -158,6 +158,8 @@ export const zh = {
   "playback.fullscreenWaiting": "画面准备好后可全屏",
   "playback.fullscreenFailed": "未能切换全屏，请重试",
   "playback.exitFullscreen": "退出全屏",
+  "playback.wide": "宽屏模式",
+  "playback.exitWide": "退出宽屏",
   "playback.pip": "悬浮小窗",
   "playback.exitPip": "返回页面观看",
   "playback.pipUnavailable": "当前浏览器暂不支持悬浮小窗",

@@ -158,6 +158,8 @@ export const en: Record<CopyKey, string> = {
   "playback.fullscreenWaiting": "Fullscreen is available when the video is ready.",
   "playback.fullscreenFailed": "Couldn’t switch fullscreen mode. Try again.",
   "playback.exitFullscreen": "Exit fullscreen",
+  "playback.wide": "Widescreen",
+  "playback.exitWide": "Exit widescreen",
   "playback.pip": "Picture in picture",
   "playback.exitPip": "Return to the page",
   "playback.pipUnavailable": "Picture in picture is unavailable in this browser",

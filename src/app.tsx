@@ -96,6 +96,7 @@ function RoomPage({ state, service, settings, edit, members, connection }: { sta
   const [paused, setPaused] = useState(false);
   const [fullscreenView, setFullscreenView] = useState(false);
   const [pipView, setPipView] = useState(false);
+  const wide = state.preferences.wide;
   useEffect(() => { setPaused(false); service.setPlaybackPaused(false); }, [state.video, service]);
   useEffect(() => {
     const syncFullscreen = () => setFullscreenView(!!document.fullscreenElement);
@@ -109,6 +110,15 @@ function RoomPage({ state, service, settings, edit, members, connection }: { sta
       document.removeEventListener('leavepictureinpicture', syncPip);
     };
   }, []);
+  useEffect(() => {
+    if (!wide) return;
+    const exitWide = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || document.fullscreenElement || document.querySelector('dialog[open]')) return;
+      service.savePreferences({ ...service.getSnapshot().preferences, wide: false });
+    };
+    document.addEventListener('keydown', exitWide);
+    return () => document.removeEventListener('keydown', exitWide);
+  }, [wide, service]);
   const owner = state.members.find(person => person.isOwner);
   const selected = state.members.find(person => person.uid === state.selected);
   const entries:CouchEntry[] = state.members.filter(person => person !== owner).map(person => ({ key:String(person.uid), name:person.name, you:person.uid === state.uid, selectable:true, status:{ tone:person.sharing ? 'live' : 'off', labelKey:person.sharing ? 'state.peer.connected' : 'state.peer.present', icon:person.sharing ? 'share' : 'users', comic:'signal-connected' } }));
@@ -124,7 +134,7 @@ function RoomPage({ state, service, settings, edit, members, connection }: { sta
     try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await video.requestPictureInPicture(); }
     catch { /* picture-in-picture is unavailable in this browser */ }
   };
-  return <main className="lr-room sw-room"><div className="sw-room-heading"><div><h1>{state.room?.name}</h1><p>{state.room?.description || '每个人都可以分享，点击成员切换观看。'}</p></div><span className="sw-count">{state.members.length} 人在线 · {state.members.filter(person => person.sharing).length} 路共享</span></div>
+  return <main className={`lr-room sw-room${wide ? ' is-wide' : ''}`}><div className="sw-room-heading"><div><h1>{state.room?.name}</h1><p>{state.room?.description || '每个人都可以分享，点击成员切换观看。'}</p></div><span className="sw-count">{state.members.length} 人在线 · {state.members.filter(person => person.sharing).length} 路共享</span></div>
     <div className="lr-scene"><StageTv label="共享画面" live={!!state.video} indicator={<span className={`sw-tv-lamp${state.connected ? ' is-live' : ''}`} aria-label={state.connection}/>}>
       <VideoSurface state={state} paused={paused}/>{!state.video && <StageOverlay icon={state.connecting ? 'loader' : 'tv'} comic={state.connecting ? 'signal-connecting' : 'waiting-for-host'} waiting={state.connecting} message={state.connecting ? '正在连接声网…' : selected ? `${selected.name} 暂未共享画面` : '等待大家分享画面'}/>}
       <div className="sw-playback"><span className="sw-watching">{state.video ? `${paused ? '已暂停' : '正在观看'} · ${selected?.name || '共享画面'}${state.selected === state.uid ? '（你）' : ''}` : '选择下方成员，切换共享画面'}</span><div className="sw-playback-tools">
@@ -136,6 +146,7 @@ function RoomPage({ state, service, settings, edit, members, connection }: { sta
         <Btn icon="sliders" title="playback.more" size="dense" quiet onClick={settings}/>
         <Btn icon={pipView ? 'pipExit' : 'pip'} title={pipView ? 'playback.exitPip' : 'playback.pip'} size="dense" quiet disabled={!state.video} onClick={() => void togglePip()}/>
         <div className="sw-fit-group" role="group" aria-label={t('playback.pictureFit')}>{fitOptions.map(([fit, icon, title]) => <Btn key={fit} icon={icon} title={title} size="dense" quiet pressed={state.preferences.fit === fit} onClick={() => service.savePreferences({ ...state.preferences,fit })}/>)}</div>
+        {!fullscreenView && <span className="sw-wide-toggle"><Btn icon={wide ? 'theaterExit' : 'theater'} title={wide ? 'playback.exitWide' : 'playback.wide'} size="dense" quiet pressed={wide} onClick={() => service.savePreferences({ ...state.preferences, wide: !wide })}/></span>}
         <Btn icon={fullscreenView ? 'contract' : 'expand'} title={fullscreenView ? 'playback.exitFullscreen' : 'playback.fullscreen'} size="dense" quiet onClick={toggleFullscreen}/>
       </div></div>
     </StageTv><div className="lr-host-controls"><div className="lr-media-controls lr-host-share-controls"><div className="lr-host-action-dock">

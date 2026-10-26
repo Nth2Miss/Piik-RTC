@@ -46,6 +46,7 @@
 .sw-fit-group { display:flex; gap:2px; padding:2px; border-radius:12px; background:#ffffff14; }
 .sw-fit-group .lr-btn { background:transparent; }
 .sw-fit-group .lr-btn.is-on { background:#ffffff38; }
+.sw-wide-toggle { display:contents; }
 .sw-watching { flex:1; min-width:0; font-size:11px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .sw-connection { display:grid; gap:16px; }
 .sw-connection-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
@@ -107,6 +108,12 @@
   .sw-room { flex:1; min-height:0; display:flex; flex-direction:column; padding-top:4px; padding-bottom:8px; }
   .sw-room .lr-scene { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:center; }
   .sw-room .lr-tv { flex:none; width:min(960px,100%,calc(177.78svh - 820px)); }
+  .sw-app.is-room .sw-room.is-wide { width:100%; max-width:none; padding-inline:clamp(10px,2vw,24px); }
+  .sw-room.is-wide .sw-room-heading,
+  .sw-room.is-wide .sw-stage-caption,
+  .sw-room.is-wide .sw-roster,
+  .sw-room.is-wide>.lr-deck { display:none; }
+  .sw-app.is-room .sw-room.is-wide .lr-tv { width:min(1600px,100%,calc(max(240px,100svh - 200px) * 16 / 9 + 30px)); }
   .sw-room .lr-host-controls { flex:none; margin-top:8px; }
   .sw-roster { flex:none; max-height:140px; }
   .sw-roster .lr-couch-footer { min-height:28px; }
@@ -125,6 +132,7 @@
   .sw-playback { padding:6px; flex-wrap:wrap; }
   .sw-playback .lr-btn { --button-size:28px; width:28px; min-width:28px; }
   .sw-playback-tools { gap:4px; }
+  .sw-wide-toggle { display:none; }
   .sw-volume input { width:54px; }
   .sw-watching { display:none; }
   .sw-lobby { padding-top:24px; }
