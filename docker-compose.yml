@@ -1,0 +1,19 @@
+services:
+  screen:
+    build: .
+    image: screen-room:latest
+    container_name: screen-room
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内端口固定，宿主机端口用 SCREEN_PORT 调整
+      PORT: 3000
+    ports:
+      - "${SCREEN_PORT:-3000}:3000"
+    volumes:
+      - screen-data:/app/data
+
+volumes:
+  screen-data:
+    name: screen-room-data
