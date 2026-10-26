@@ -87,5 +87,8 @@
     "src/client/components/living/use-anchored-popover.ts": "c23f87d762594eb5a325481d328d79627423ca2664c45ff2604835b2041cebca",
     "src/client/components/living/QualityTileGlyph.tsx": "5d1863a5796532a083668fbc7c439c6fe059fc5a773bfa41e10d279ce3aefc67",
     "src/client/ui/theme.ts": "edfb0bcf2bf6f13637b260dd9e0bcc6f15cec1f85871b4a6a83726dad61b7e47"
+  },
+  "static": {
+    "public/favicon.svg": "65344d0ef27b7a9c87dcc9e32491268ec19e5b671154015d08ba7296c8e7ab0e"
   }
 }

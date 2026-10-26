@@ -1,8 +1,11 @@
 services:
-  screen:
-    build: .
-    image: screen-room:latest
-    container_name: screen-room
+  piik-sw:
+    build:
+      context: .
+      args:
+        VITE_AGORA_BADGE_URL: "${VITE_AGORA_BADGE_URL:-}"
+    image: piik-sw:latest
+    container_name: piik-sw
     restart: unless-stopped
     env_file:
       - .env
@@ -12,8 +15,8 @@ services:
     ports:
       - "${SCREEN_PORT:-3000}:3000"
     volumes:
-      - screen-data:/app/data
+      - piik-sw-data:/app/data
 
 volumes:
-  screen-data:
-    name: screen-room-data
+  piik-sw-data:
+    name: piik-sw-data

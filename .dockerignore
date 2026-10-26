@@ -11,6 +11,10 @@ data
 .wrangler
 .dev.vars
 *.log
+*.tar.gz
+.idea
+.DS_Store
+Thumbs.db
 README.md
 THIRD_PARTY_NOTICES.md
 edge

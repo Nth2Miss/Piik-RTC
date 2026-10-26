@@ -2,12 +2,14 @@ import AgoraRTC, { type ILocalAudioTrack, type ILocalVideoTrack, type IRemoteVid
 import { captureScreen, type CapturedScreen } from './capture';
 import { defaults, normalizePreferences, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
+import { usernameError } from './username';
 import type { Participant, Room } from './types';
 
 export interface RoomState {
   view: 'welcome' | 'lobby' | 'room';
   name: string;
   configured: boolean;
+  realtime: boolean;
   ready: boolean;
   busy: boolean;
   rooms: Room[];
@@ -23,6 +25,48 @@ export interface RoomState {
   caption: string;
   notice?: { message: string; error: boolean };
   preferences: Preferences;
+}
+export interface ConnectionSnapshot {
+  at: number;
+  connected: boolean;
+  connecting: boolean;
+  connection: string;
+  room?: { id: string; isOwner: boolean; members: number };
+  network?: { rtt: number; uplinkKbps: number; recvBitrate: number; sendBitrate: number; quality: number };
+  local?: {
+    width: number; height: number;
+    captureFrameRate?: number; sendFrameRate?: number;
+    codec?: string; sendBitrate: number; targetBitrate: number;
+    rtt: number; encodeDelay?: number;
+    hasAudio: boolean; surface: string;
+  };
+  remote?: {
+    uid: number; name: string;
+    width: number; height: number;
+    receiveFrameRate?: number; decodeFrameRate?: number;
+    codec?: string; receiveBitrate: number;
+    packetLossRate: number; currentPacketLossRate: number;
+    receiveDelay: number; transportDelay: number; endToEndDelay: number;
+  };
+}
+export interface DiagnosticsReport {
+  capturedAt: string;
+  app: { name: string; sdk: string; secureContext: boolean };
+  environment: Record<string, unknown>;
+  room: { id: string; name: string; isOwner: boolean; closesAt: number | null } | null;
+  session: {
+    view: string; uid?: number; selected?: number | string;
+    connected: boolean; connecting: boolean; sharing: boolean;
+    connection: string; members: { uid: number; name: string; sharing: boolean; isOwner: boolean }[];
+  };
+  preferences: Preferences;
+  media: ConnectionSnapshot;
+  rtcStats: unknown;
+  localVideoStats: unknown;
+  remoteVideoStats: unknown;
+  networkQuality: unknown;
+  capture: { surface: string; hasAudio: boolean; tracks: { kind: string; enabled: boolean }[] } | null;
+  issues: { at: string; kind: string; message: string }[];
 }
 class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -47,8 +91,21 @@ export const inviteUrl = (room: Room) => `${location.origin}/#room=${room.id}`;
 export function createRoomService() {
   let preferences = { ...defaults }, name = '';
   try { preferences = normalizePreferences(JSON.parse(localStorage.getItem('screen-preferences') || '{}')); name = localStorage.getItem('screen-display-name') || ''; } catch { /* optional storage */ }
-  let state: RoomState = { view:'welcome', name, configured:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences };
+  let state: RoomState = { view:'welcome', name, configured:false, realtime:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences };
   const listeners = new Set<() => void>();
+  const issues: { at:string; kind:string; message:string }[] = [];
+  const redact = (value: string) => value
+    .replace(/((?:token|sessionKey|inviteKey|appId|password|secret)\s*[=:]\s*)[^\s,;&"']+/gi, '$1[redacted]')
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[token]');
+  function recordIssue(kind: string, message: string) {
+    issues.push({ at:new Date().toISOString(), kind, message:redact(String(message)).slice(0, 500) });
+    if (issues.length > 50) issues.shift();
+  }
+  window.addEventListener('error', event => recordIssue('window-error', event.message || '未知错误'));
+  window.addEventListener('unhandledrejection', event => {
+    const reason = event.reason as { message?: string } | undefined;
+    recordIssue('unhandled-rejection', reason?.message || String(event.reason));
+  });
   const client = AgoraRTC.createClient({ mode:'rtc', codec:'vp8' });
   AgoraRTC.setLogLevel(3);
   let joined = false, confirmed = false, attempt = 0, revision = 0, listRevision = 0;
@@ -58,6 +115,9 @@ export function createRoomService() {
   let capture: CapturedScreen | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let heartbeatPending = false, renewing = false;
+  let socket: WebSocket | undefined;
+  let socketRetry: ReturnType<typeof setTimeout> | undefined;
+  let socketDelay = 1000;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   // Media is joined on demand: an empty room with nothing to watch costs nothing.
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -82,8 +142,97 @@ export function createRoomService() {
     listeners.forEach(listener => listener());
   }
   function notify(message: string, error = false) {
+    if (error) recordIssue('notice', message);
     clearTimeout(noticeTimer); emit({ notice:{ message, error } });
     noticeTimer = setTimeout(() => emit({ notice:undefined }), 9000);
+  }
+  function connectionSnapshot(): ConnectionSnapshot {
+    const snapshot: ConnectionSnapshot = {
+      at:Date.now(), connected:state.connected, connecting:state.connecting, connection:state.connection,
+      room:state.room ? { id:state.room.id, isOwner:state.room.isOwner, members:state.members.length } : undefined,
+    };
+    if (!state.connected) return snapshot;
+    try {
+      const rtc = client.getRTCStats();
+      const quality = client.getNetworkQuality();
+      snapshot.network = { rtt:Math.round(rtc.RTT || 0), uplinkKbps:Math.round(rtc.OutgoingAvailableBandwidth || 0),
+        recvBitrate:Math.round(rtc.RecvBitrate || 0), sendBitrate:Math.round(rtc.SendBitrate || 0),
+        quality:quality.uplinkNetworkQuality };
+    } catch { /* stats are unavailable until media connects */ }
+    if (tracks.length) {
+      try {
+        const stats = client.getLocalVideoStats();
+        snapshot.local = {
+          width:Math.round(stats.sendResolutionWidth || stats.captureResolutionWidth || 0),
+          height:Math.round(stats.sendResolutionHeight || stats.captureResolutionHeight || 0),
+          captureFrameRate:stats.captureFrameRate, sendFrameRate:stats.sendFrameRate,
+          codec:stats.codecType, sendBitrate:Math.round(stats.sendBitrate || 0),
+          targetBitrate:Math.round(stats.targetSendBitrate || 0),
+          rtt:Math.round(stats.sendRttMs || 0), encodeDelay:stats.encodeDelay,
+          hasAudio:!!capture?.hasAudio, surface:capture?.surface || 'unknown',
+        };
+      } catch { /* not publishing video */ }
+    }
+    if (state.selected !== undefined && state.selected !== state.uid) {
+      try {
+        const stats = client.getRemoteVideoStats()[String(state.selected)];
+        if (stats) {
+          const person = state.members.find(member => member.uid === state.selected);
+          snapshot.remote = {
+            uid:Number(state.selected), name:person?.name || `成员 ${state.selected}`,
+            width:Math.round(stats.receiveResolutionWidth || 0), height:Math.round(stats.receiveResolutionHeight || 0),
+            receiveFrameRate:stats.receiveFrameRate, decodeFrameRate:stats.decodeFrameRate,
+            codec:stats.codecType, receiveBitrate:Math.round(stats.receiveBitrate || 0),
+            packetLossRate:stats.packetLossRate || 0, currentPacketLossRate:stats.currentPacketLossRate || 0,
+            receiveDelay:Math.round(stats.receiveDelay || 0), transportDelay:Math.round(stats.transportDelay || 0),
+            endToEndDelay:Math.round(stats.end2EndDelay || 0),
+          };
+        }
+      } catch { /* not subscribed yet */ }
+    }
+    return snapshot;
+  }
+  function collectDiagnostics(): DiagnosticsReport {
+    const attempt = <T,>(read: () => T): T | { unavailable:string } => {
+      try { return read(); } catch (error) { return { unavailable:errorText(error) }; }
+    };
+    const navigation = navigator as Navigator & { deviceMemory?: number };
+    return {
+      capturedAt:new Date().toISOString(),
+      app:{ name:'piik-sw', sdk:AgoraRTC.VERSION, secureContext:window.isSecureContext },
+      environment:{
+        userAgent:navigator.userAgent, platform:navigator.platform, language:navigator.language,
+        languages:[...navigator.languages], hardwareConcurrency:navigator.hardwareConcurrency,
+        deviceMemory:navigation.deviceMemory,
+        screen:{ width:screen.width, height:screen.height, availWidth:screen.availWidth, availHeight:screen.availHeight },
+        devicePixelRatio:window.devicePixelRatio, online:navigator.onLine, visibility:document.visibilityState,
+      },
+      room:state.room ? { id:state.room.id, name:state.room.name, isOwner:state.room.isOwner, closesAt:state.room.closesAt } : null,
+      session:{
+        view:state.view, uid:state.uid, selected:state.selected,
+        connected:state.connected, connecting:state.connecting, sharing:state.sharing, connection:state.connection,
+        members:state.members.map(({ uid, name, sharing, isOwner }) => ({ uid, name, sharing, isOwner })),
+      },
+      preferences:state.preferences,
+      media:connectionSnapshot(),
+      rtcStats:state.connected ? attempt(() => client.getRTCStats()) : null,
+      localVideoStats:tracks.length ? attempt(() => client.getLocalVideoStats()) : null,
+      remoteVideoStats:state.connected ? attempt(() => client.getRemoteVideoStats()) : null,
+      networkQuality:state.connected ? attempt(() => client.getNetworkQuality()) : null,
+      capture:capture ? { surface:capture.surface, hasAudio:capture.hasAudio,
+        tracks:tracks.map(track => ({ kind:track.trackMediaType, enabled:track.enabled })) } : null,
+      issues:[...issues],
+    };
+  }
+  function exportDiagnostics() {
+    const blob = new Blob([JSON.stringify(collectDiagnostics(), null, 2)], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `piik-sw-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    notify('诊断信息已导出，可附在问题反馈中。');
   }
   const source = new SourceController({ client,
     remote:uid => client.remoteUsers.find(user => user.uid === uid),
@@ -121,26 +270,82 @@ export function createRoomService() {
   }
   function scheduleHeartbeat() {
     clearInterval(heartbeatTimer); heartbeatTimer = undefined;
-    if (!joined || document.hidden) return;
-    heartbeatTimer = setInterval(() => void heartbeat(), 30000);
+    if (!joined || document.hidden || socket?.readyState === WebSocket.OPEN) return;
+    heartbeatTimer = setInterval(() => {
+      if (socket?.readyState === WebSocket.OPEN) { clearInterval(heartbeatTimer); heartbeatTimer = undefined; return; }
+      void heartbeat();
+    }, 30000);
+  }
+  function reactToParticipants(next: Participant[]) {
+    const sharer = next.find(person => person.sharing && person.uid !== state.uid);
+    if (sharer) {
+      cancelIdleDisconnect();
+      if (!state.connected && Date.now() > mediaRetryAt) {
+        void connectMedia().then(() => { if (state.connected) void select(sharer.uid); }).catch(() => { mediaRetryAt = Date.now() + 30000; });
+      }
+    } else if (!tracks.length) {
+      scheduleIdleDisconnect();
+    }
+  }
+  function sendPresence() {
+    if (!socket || socket.readyState !== WebSocket.OPEN || !state.room) return false;
+    socket.send(JSON.stringify({ type:'presence', sharing: tracks.length > 0 }));
+    return true;
+  }
+  function openSocket() {
+    if (!state.realtime || !joined || !state.room || !sessionKey || socket || document.hidden) return;
+    const roomId = state.room.id;
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+    socket = ws;
+    ws.onopen = () => {
+      if (ws !== socket) { ws.close(); return; }
+      socketDelay = 1000;
+      clearInterval(heartbeatTimer); heartbeatTimer = undefined;
+      if (joined && sessionKey) ws.send(JSON.stringify({ type:'subscribe', roomId, sessionKey }));
+    };
+    ws.onmessage = event => {
+      if (ws !== socket) return;
+      let message: { type?: string; participants?: Participant[]; room?: Room };
+      try { message = JSON.parse(String(event.data)); } catch { return; }
+      if (message.type === 'room' && message.room?.id === state.room?.id && Array.isArray(message.participants)) {
+        participants = message.participants;
+        emit({ room:message.room });
+        reactToParticipants(message.participants);
+      } else if (message.type === 'closed') {
+        closeSocket();
+        notify('房间已关闭，请选择其他房间。', true);
+        void leave().then(() => refreshRooms());
+      } else if (message.type === 'expired') {
+        closeSocket();
+        notify('会话已失效，请重新进入房间。', true);
+        void leave().then(() => refreshRooms());
+      }
+    };
+    ws.onclose = () => {
+      if (socket === ws) socket = undefined;
+      if (!joined || document.hidden) return;
+      scheduleHeartbeat();
+      if (socketRetry) return;
+      socketRetry = setTimeout(() => { socketRetry = undefined; openSocket(); }, socketDelay);
+      socketDelay = Math.min(socketDelay * 2, 30000);
+    };
+    ws.onerror = () => { ws.close(); };
+  }
+  function closeSocket() {
+    clearTimeout(socketRetry); socketRetry = undefined;
+    const ws = socket; socket = undefined;
+    if (ws) { ws.onclose = null; ws.close(); }
   }
   async function heartbeat() {
     if (!joined || !state.room || !sessionKey || heartbeatPending) return;
+    if (sendPresence()) return;
     const id = state.room.id, key = sessionKey, version = revision;
     heartbeatPending = true;
     try {
       const result = await api<{ participants:Participant[]; room:Room }>(`/api/rooms/${id}/presence`, { sessionKey:key, sharing:tracks.length > 0 });
       if (version !== revision || key !== sessionKey) return;
       participants = result.participants; emit({ room:result.room });
-      const sharer = result.participants.find(person => person.sharing && person.uid !== state.uid);
-      if (sharer) {
-        cancelIdleDisconnect();
-        if (!state.connected && Date.now() > mediaRetryAt) {
-          void connectMedia().then(() => { if (state.connected) void select(sharer.uid); }).catch(() => { mediaRetryAt = Date.now() + 30000; });
-        }
-      } else if (!tracks.length) {
-        scheduleIdleDisconnect();
-      }
+      reactToParticipants(result.participants);
     } catch (error) {
       if (version === revision && key === sessionKey && error instanceof ApiError && [403,404].includes(error.status)) {
         notify(errorText(error), true); await leave(); await refreshRooms();
@@ -213,6 +418,7 @@ export function createRoomService() {
     if (switchSource) void heartbeat();
   }
   async function leave() {
+    closeSocket();
     attempt++; revision++; clearInterval(heartbeatTimer); heartbeatTimer = undefined;
     cancelIdleDisconnect(); mediaIdle = false;
     const room = state.room, key = sessionKey;
@@ -237,6 +443,7 @@ export function createRoomService() {
       await heartbeat();
       if (!joined) return;
       scheduleHeartbeat();
+      openSocket();
     } catch (error) { emit({ view:'lobby', room:undefined }); throw error; }
   }
   async function refreshRooms() {
@@ -247,6 +454,17 @@ export function createRoomService() {
     const active = result.rooms.find(room => room.id === state.room?.id);
     if (state.room && !active && !state.busy) { await leave(); notify('房间已关闭，请选择其他房间。'); }
     emit({ rooms:result.rooms, ...(active ? { room:active } : {}) });
+  }
+  async function confirm(value: string) {
+    const trimmed = value.trim();
+    const invalid = usernameError(trimmed);
+    if (invalid) throw new Error(invalid);
+    const profile = await api<{name:string}>('/api/profile', { name:trimmed.slice(0, 24) });
+    confirmed = true; emit({ name:profile.name, view:'lobby' });
+    try { localStorage.setItem('screen-display-name', profile.name); } catch { /* optional storage */ }
+    await refreshRooms();
+    const id = new URLSearchParams(location.hash.slice(1)).get('room');
+    if (id && /^[a-f0-9]{12}$/.test(id)) await enter(await api<Room>(`/api/rooms/${id}`));
   }
   async function share() {
     if (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
@@ -298,10 +516,11 @@ export function createRoomService() {
   const listTimer = setInterval(() => { if (confirmed && !state.busy && !document.hidden) void refreshRooms().catch(() => {}); }, 30000);
   document.addEventListener('visibilitychange', () => {
     if (!joined) return;
-    if (document.hidden) { clearInterval(heartbeatTimer); heartbeatTimer = undefined; return; }
-    void heartbeat(); scheduleHeartbeat();
+    if (document.hidden) { clearInterval(heartbeatTimer); heartbeatTimer = undefined; closeSocket(); return; }
+    openSocket(); void heartbeat(); scheduleHeartbeat();
   });
   window.addEventListener('pagehide', () => {
+    closeSocket();
     clearInterval(listTimer); clearInterval(heartbeatTimer); clearTimeout(idleTimer); capture?.close();
     if (state.room && sessionKey) navigator.sendBeacon(`/api/rooms/${state.room.id}/leave`, new Blob([JSON.stringify({ sessionKey })], { type:'application/json' }));
     void client.leave();
@@ -310,17 +529,28 @@ export function createRoomService() {
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     getSnapshot:() => state,
     async initialize() {
-      try { emit({ configured:(await api<{configured:boolean}>('/api/config')).configured }); }
+      let saved = name;
+      try {
+        const [config, profile] = await Promise.all([
+          api<{configured:boolean; realtime?:boolean}>('/api/config'),
+          api<{name:string|null}>('/api/profile'),
+        ]);
+        saved = profile.name || saved;
+        emit({ configured:config.configured, realtime:config.realtime === true, name:saved });
+      }
       catch (error) { notify(errorText(error), true); }
       finally { emit({ ready:true }); }
+      if (!saved) return;
+      try { await confirm(saved); }
+      catch (error) {
+        if (usernameError(saved)) emit({ name:saved });
+        notify(errorText(error), true);
+      }
     },
-    confirmName:(value: string) => run(async () => {
-      const profile = await api<{name:string}>('/api/profile', { name:value.trim().slice(0,24) });
-      confirmed = true; emit({ name:profile.name, view:'lobby' });
-      try { localStorage.setItem('screen-display-name', profile.name); } catch { /* optional storage */ }
+    confirmName:(value: string) => run(() => confirm(value)),
+    refresh:() => run(async () => {
+      if (joined) await heartbeat();
       await refreshRooms();
-      const id = new URLSearchParams(location.hash.slice(1)).get('room');
-      if (id && /^[a-f0-9]{12}$/.test(id)) await enter(await api<Room>(`/api/rooms/${id}`));
     }),
     join:(room:Room) => run(() => enter(room)),
     joinInvite:(value:string) => run(async () => {
@@ -352,6 +582,8 @@ export function createRoomService() {
       catch { notify('无法自动复制，请从房间信息中手动复制邀请链接。', true); }
     },
     dismissNotice:() => emit({ notice:undefined }),
+    getConnectionSnapshot: connectionSnapshot,
+    exportDiagnostics,
   };
 }
 export type RoomService = ReturnType<typeof createRoomService>;

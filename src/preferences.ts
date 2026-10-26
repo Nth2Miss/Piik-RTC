@@ -9,7 +9,7 @@ export interface Preferences {
   includeSelf: boolean;
   volume: number;
   muted: boolean;
-  fit: 'contain' | 'cover';
+  fit: 'contain' | 'cover' | 'fill';
 }
 export const defaults: Preferences = { resolution: '1080', fps: 30, bitrate: 3000, optimization: 'detail', audio: true, includeSelf: false, volume: 80, muted: false, fit: 'contain' };
 export const presets: Record<string, Partial<Preferences>> = {
@@ -29,7 +29,7 @@ export function normalizePreferences(value: unknown): Preferences {
     includeSelf: typeof v.includeSelf === 'boolean' ? v.includeSelf : defaults.includeSelf,
     volume: typeof v.volume === 'number' && Number.isFinite(v.volume) ? Math.round(Math.max(0, Math.min(100, v.volume))) : defaults.volume,
     muted: typeof v.muted === 'boolean' ? v.muted : defaults.muted,
-    fit: v.fit === 'cover' ? 'cover' : 'contain',
+    fit: v.fit === 'cover' || v.fit === 'fill' ? v.fit : 'contain',
   };
 }
 export function encoderConfig(p: Preferences): VideoEncoderConfiguration {

@@ -1,144 +1,156 @@
-# 同屏 Screen Room
+# Piik-sw
 
-基于声网 RTC Web SDK 的屏幕共享服务。Node.js + Express 后端签发 AccessToken2，React + TypeScript + Vite 前端直接复用 Piik 的生产组件与样式。
+Piik-sw 是一个和朋友一起看屏幕的小客厅。基于声网 RTC Web SDK 的多人屏幕共享服务，前端复用 [Piik](https://github.com/TNTcraftHIM/Piik) 的客厅界面与设计系统。
 
-使用流程为“输入用户名 → 房间大厅 → 进入 / 创建房间”。房间页使用 Piik 原版电视舞台、沙发成员区、控制台、状态插画及设置面板，点击沙发成员或成员列表切换画面。媒体传输由声网 RTC 提供。
+输入用户名即可创建或加入房间。房间里每个人都能同时共享屏幕，点击沙发上的成员即可切换观看。没有注册、密码或客户端安装。
 
-Piik 源码保存在 `src/vendor/piik/`，原文件未修改，版本及 SHA-256 校验值见 `upstream.json`。`src/app.tsx` 是 React 页面适配层，`src/room-service.ts` 将房间 API、在线成员、声网发布/订阅状态提供给组件；`src/style.css` 仅包含房间大厅等业务扩展及视口适配。上游许可见 `THIRD_PARTY_NOTICES.md`。
+## 功能
 
-## 本地启动
+- **多人同时共享**：每位成员都可以独立发布屏幕、窗口或标签页，切换观看不会中断自己的共享。
+- **按需连接声网**：房间无人共享且自己未共享时不会加入频道，不产生 RTC 用量；共享结束或无人观看 1 分钟后自动断开。
+- **播放器控制**：暂停/播放、静音、音量、切换来源、播放设置、画中画、完整显示 / 等比铺满 / 拉伸铺满、全屏。
+- **连接详情**：实时查看本机采集分辨率、帧率、视频编码、码率和来源声音，以及当前观看对象的接收统计、RTT、上行带宽和网络质量。
+- **问题排查与诊断**：内置常见问题清单，一键导出脱敏的 JSON 诊断报告。
+- **房间生命周期**：最后一人离开后空置 15 分钟自动关闭；WebSocket 实时同步成员和共享状态，不可用时回退到 HTTP 心跳。
+- **Piik 界面**：电视舞台、沙发成员区、亮暗主题、中英文切换和响应式布局。
+- **Docker 部署**：多阶段构建，非 root 运行，SQLite 数据持久化。
 
-需要 Node.js 24+（使用内置 SQLite，无需另外安装数据库）。
+## 技术栈
 
-```powershell
+| 层 | 技术 |
+| --- | --- |
+| 前端 | React 19、TypeScript、Vite 7 |
+| 后端 | Node.js 24、Express 5、`node:sqlite`、`ws` |
+| 实时媒体 | 声网 RTC Web SDK 4.x（VP8、AccessToken2） |
+| 界面 | Piik（原样 vendored，MIT） |
+
+## 快速开始
+
+### 前置条件
+
+- Node.js 24+（使用内置 SQLite，无需另外安装数据库）
+- 一个启用 Token 鉴权的声网 RTC 项目，获取 App ID 和 App Certificate
+
+### 本地运行
+
+```bash
 npm install
-Copy-Item .env.example .env
-# 编辑 .env 填写以下两项
+cp .env.example .env
+# 编辑 .env，填写 AGORA_APP_ID 和 AGORA_APP_CERTIFICATE
 npm run dev
 ```
 
-浏览器打开 http://localhost:3000。
+Windows PowerShell 使用 `Copy-Item .env.example .env`。打开 <http://localhost:3000>。
 
-## 声网凭据
+屏幕采集需要安全上下文：`localhost` 或 HTTPS。远程访问其他设备时请部署到 HTTPS。
 
-登录 [声网控制台](https://console.shengwang.cn/)，在项目管理中创建或选择 **RTC 项目**，启用 App Certificate / Token 鉴权。将同一项目中的以下值写入 `.env`：
+### 环境变量
 
-```dotenv
-AGORA_APP_ID=你的32位AppID
-AGORA_APP_CERTIFICATE=你的32位项目证书
-PORT=3000
-PUBLIC_ORIGIN=
-```
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `AGORA_APP_ID` | 是 | 声网 RTC 项目 App ID |
+| `AGORA_APP_CERTIFICATE` | 是 | 声网 RTC 项目 App Certificate，仅后端使用 |
+| `PORT` | 否 | 服务监听端口，默认 `3000` |
+| `PUBLIC_ORIGIN` | 否 | 对外完整 HTTPS 来源，例如 `https://screen.example.com`，用于 Cookie 安全属性 |
+| `SCREEN_PORT` | 否 | Docker Compose 映射到宿主机的端口，默认 `3000` |
+| `VITE_AGORA_BADGE_URL` | 否 | 帮助面板中的 RTC 用量徽章 URL；会进入前端产物，留空则不显示 |
 
-不需要 Customer ID、Customer Secret、REST API 密钥，也不需要手工生成临时 Token。App Certificate 仅供后端使用，切勿添加 `VITE_` 前缀或提交至代码仓库。修改配置后需要重启服务。
+> 不要提交 `.env`。App Certificate 不需要 `VITE_` 前缀，也不会进入前端产物；`VITE_AGORA_BADGE_URL` 会进入前端产物，只应填写可公开的徽章地址。
 
-## 使用方法
+## 使用流程
 
-1. 打开网站后先输入用户名。可记住上次输入，但每次打开页面都需要确认进入；没有注册、密码或账号登录。
-2. 大厅列出全站所有开放房间。点击房间加入，或创建带名称和描述的新房间。不是按浏览器收藏的个人列表。
-3. 进入房间即出现在 Piik 沙发成员区，但不会立即连接声网：房间里没有共享时保持离线，不产生 RTC 用量。有人开始共享、点击成员观看或自己点击“开始共享”时才会连接媒体。
-4. 媒体连接后，所有成员都可以同时共享。点击成员会按需连接并切换到其画面和声音，切换观看不会停止自己的共享。
-5. 点击“停止分享”只结束自己的采集；点击“离开房间”或顶部返回按钮退出房间。最后一人离开后，连续空置 15 分钟自动关闭；倒计时内重新加入会取消关闭。
-
-### 共享与观看设置
-
-- 场景预设：Piik 的轻量、高清、高帧率，使用声网可配置的分辨率、帧率及码率。
-- 自定义编码目标：480p / 720p / 1080p / 1440p，15 / 24 / 30 / 60 fps，1–8 Mbps 最大码率，清晰 / 流畅 / 均衡优化策略。
-- 点击“开始共享”后，在浏览器选择器中选择应用窗口、浏览器标签页或整个屏幕。声音设置保留共享所选来源音频、是否允许选择本站标签页。
-- 观看选项：音量、静音、完整显示或裁剪填满，即时生效。只播放当前选中成员的声音，不播放自己的共享声音以避免回声。
-- 设置保存在当前浏览器。共享编码与采集参数在下次开始共享时生效；分辨率、帧率和码率是目标值，实际效果受共享来源、设备和网络限制。
+1. 首次打开输入用户名，之后自动记住；同一房间内用户名不能重复。
+2. 在大厅创建房间或加入已有房间。
+3. 点击“开始共享”选择屏幕、窗口或标签页；其他成员点击沙发或成员列表切换观看。
+4. 画面底部控制条可暂停、调音量、切换来源、切换适配和全屏；点击“连接详情”查看实时媒体统计。
+5. 点击“停止分享”只结束自己的共享；离开房间后，最后一人离开满 15 分钟房间自动关闭。
 
 ### 共享音频
 
-调用原生 `getDisplayMedia`，开启音频时传入 `windowAudio: "window"` 和 `systemAudio: "include"`，再用声网 `createCustomVideoTrack` / `createCustomAudioTrack` 发送所选轨道。标签页发送标签页声音，窗口发送窗口声音，整个屏幕发送系统声音（包含其他应用的声音）。关闭音频开关时不发送任何采集音轨。
+共享屏幕时可在浏览器选择器中勾选音频。标签页发送标签页声音，窗口发送窗口声音，整个屏幕发送系统音频。窗口音频依赖较新的 Chromium 和操作系统支持，未返回音轨时会明确提示本次仅共享画面。应用不采集摄像头或麦克风。
 
-窗口音频仍需在浏览器选择器中勾选音频，并依赖浏览器与操作系统支持。项目保守地仅对已知 Chromium 141+ 接受窗口音轨，旧版或未知引擎的窗口音轨会停止，避免忽略提示后意外传出整机声音；这些浏览器可改选标签页音频。浏览器没有返回音轨时，会明确提示本次仅分享画面。
+## 部署
 
-共享来源统一在浏览器选择器中确定，无需在设置中预选。需在选择器中勾选共享音频；系统音频同样取决于浏览器与操作系统支持。无法识别来源的音轨会丢弃；窗口音频不会回退为系统音频。
+### Node.js
 
-不采集摄像头或麦克风。播放共享音频可能需要观看者点击页面以满足浏览器自动播放限制。
-
-## 构建与部署
-
-### Node.js 服务器
-
-```powershell
+```bash
 npm test
 npm run build
 npm start
 ```
 
-前后端使用同一端口。生产环境在 Node.js 服务前配置 HTTPS 反向代理，并把 `PUBLIC_ORIGIN` 设置为对外完整来源，例如 `https://screen.example.com`（无尾部斜杠）。HTTPS 代理应转发原始 Host；不需要开放跨域 API。不要公开 Vite 开发服务器。
+生产环境请在 Node 服务前配置 HTTPS 反向代理，并把 `PUBLIC_ORIGIN` 设置为完整 HTTPS 来源。WebSocket 路径 `/ws` 需要转发 Upgrade：
 
-屏幕采集要求安全上下文：本机 localhost 或 HTTPS。其他设备不能通过自己的 localhost 访问本机服务，远程测试须使用部署后的 HTTPS 域名。
-
-房间和空置时间保存在 `data/rooms.sqlite`。服务端每 5 秒检查一次空房间，接口请求也会执行检查，所以无人打开网页时仍会自动关闭。刚创建但无人加入的房间从创建时开始计时；正常退出立即开始计时，异常断线约 45 秒判定离开后开始计时。重新加入取消计时。服务重启时根据已保存的最后活动时间恢复空置计时，已到期房间会关闭。
-
-用户名仅用于显示，不是身份认证。Cookie 用于绑定成员会话和记录房间创建者，以限制编辑与手动关闭权限；更换或清理 Cookie 会改变创建者身份。所有输入过用户名的人都可以从公开大厅进入房间；邀请链接仅用于快速找到房间。
-
-房间使用 RTC 模式，每位成员都持 Publisher Token。在线状态在页面可见时约每 30 秒同步一次，页面隐藏时暂停，共享开始/停止等状态变化会立即上报。Token 最长 1 小时并自动续期。声网媒体按需连接：无人共享且自己未共享时不会加入频道，共享结束或无人观看 1 分钟后自动断开，因此空房间和仅浏览房间不产生 RTC 用量。服务重启后需要重新进入房间。关闭后的房间不再签发 Token，页面在后续心跳中退出；此前已签发 Token 在到期前无法从本地立即撤销。每个浏览器最多创建 50 个开放房间，并有请求与会话限流。
-
-数据库文件被 Git 忽略，备份时应包含整个 `data/` 目录。升级时自动添加空置计时字段；旧房间会按保存的活动时间应用新的 15 分钟关闭规则。
-
-### Docker
-
-仓库根目录的 `Dockerfile` 使用多阶段构建：第一阶段安装全部依赖并执行 `npm run build`，第二阶段只保留生产依赖、`dist/` 和 `server/`，以非 root 的 `node` 用户运行 `node server/index.js --production`。`docker-compose.yml` 负责端口、环境变量和数据卷。
-
-1. 准备 `.env`（至少填写声网凭据；对外部署时填写 `PUBLIC_ORIGIN`）：
-
-```powershell
-Copy-Item .env.example .env
+```nginx
+location /ws {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 3600s;
+}
 ```
 
-2. 构建并启动：
+### Docker Compose
 
-```powershell
+```bash
+cp .env.example .env
+# 填写声网凭据；需要更换宿主机端口时在 .env 中添加 SCREEN_PORT=8080
 docker compose up -d --build
 ```
 
-宿主机默认映射 3000 端口，访问 http://localhost:3000。需要更换宿主机端口时设置 `SCREEN_PORT`，例如在 `.env` 中加入 `SCREEN_PORT=8080`；容器内始终监听 3000。对外部署仍应在前方配置 HTTPS 反向代理并转发原始 Host，同时把 `PUBLIC_ORIGIN` 设为完整的 HTTPS 域名。
+默认映射 `3000` 端口。房间数据保存在具名卷 `piik-sw-data`，重建容器不会丢失。健康检查请求 `/api/config`，`docker compose ps` 显示 `healthy` 即服务正常。
 
-3. 查看状态与日志：
+`VITE_AGORA_BADGE_URL` 在构建阶段注入前端：使用 Compose 时会从 `.env` 读取；直接执行 `docker build` 时通过 `--build-arg VITE_AGORA_BADGE_URL=...` 传入，未传则帮助面板不显示徽章。
 
-```powershell
-docker compose ps
-docker compose logs -f screen
+仓库内置 `.github/workflows/docker.yml`：推送到默认分支、创建 `v*` 标签或手动触发时，会构建镜像并推送到 GitHub Container Registry（`ghcr.io/<owner>/piik-sw`）。Pull Request 只构建不推送。若在仓库 Settings → Variables 中配置了 `VITE_AGORA_BADGE_URL`，构建时会注入前端。
+
+## 项目结构
+
+```text
+src/
+  app.tsx               React 页面、房间大厅与播放器控制
+  room-service.ts       房间 API、成员状态、声网发布/订阅与诊断采集
+  source-controller.ts  选中来源的订阅与切换
+  vendor/piik/          原样保留的 Piik 组件、样式与资源
+server/
+  app.js                Express API、Token 签发、房间接口
+  realtime.js           WebSocket 成员与共享状态推送
+  room-store.js         SQLite 存储与查询
+  room-lifecycle.js     空置倒计时与清理
+public/                 网站图标
+scripts/vendor-piik.mjs 从上游重新导入 Piik
+data/                   运行时 SQLite（Git 忽略）
 ```
 
-更新代码后重新构建：
+## 设计与限制
 
-```powershell
-git pull
-docker compose up -d --build
+- 用户名仅用于显示，不是身份认证。Cookie 绑定成员会话和房间创建者，用于限制编辑与关闭权限；更换或清理 Cookie 会改变创建者身份。
+- 所有输入过用户名的人都可以从公开大厅进入房间；邀请链接只用于快速定位房间。
+- 每位成员使用 Publisher Token，最长 1 小时并自动续期。服务重启后需要重新进入房间。
+- 房间无人共享且自己未共享时不会加入声网频道，因此浏览房间不产生 RTC 用量。
+- 已关闭房间不再签发 Token，但此前签发的 Token 在到期前无法从客户端立即撤销。
+- 每个浏览器最多创建 50 个开放房间，接口带请求限流。
+- 房间和空置时间保存在 `data/rooms.sqlite`；备份时请包含整个 `data/` 目录。
+- 诊断报告包含浏览器环境、房间与媒体状态、最近错误，不包含 token、邀请密钥等敏感字段。
+
+## 测试
+
+```bash
+npm test
 ```
 
-房间数据保存在具名卷 `screen-room-data`（挂载到容器内 `/app/data`）。备份：
+测试覆盖用户名规则、大厅与权限、多人发流、空置关闭边界、最后成员退出与重新加入、原生窗口音频选项、音轨过滤、快速切换竞态和 WebSocket 状态推送。真实多端媒体链路仍需在支持的桌面 Chrome / Edge 上验证。
 
-```powershell
-docker run --rm -v screen-room-data:/data -v "${PWD}:/backup" alpine tar czf /backup/screen-data.tar.gz -C /data .
-```
+## 第三方与许可
 
-恢复会覆盖卷内现有数据，请先停止服务：
+- 前端界面来自 [TNTcraftHIM/Piik](https://github.com/TNTcraftHIM/Piik)，按 MIT 许可原样保留在 `src/vendor/piik/`。版本、源文件与 SHA-256 校验值见 `src/vendor/piik/upstream.json` 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+- 声网 RTC Web SDK 采用 MIT 许可；使用声网服务需遵守其服务条款并自行承担相关费用。
+- 本仓库尚未添加统一的 `LICENSE` 文件；如需开源发布，请根据你的需要补充许可证。Piik 衍生部分仍遵循其 MIT 许可。
 
-```powershell
-docker compose stop screen
-docker run --rm -v screen-room-data:/data -v "${PWD}:/backup" alpine sh -c "rm -rf /data/* && tar xzf /backup/screen-data.tar.gz -C /data"
-docker compose start screen
-```
+## 参考
 
-如果希望直接使用宿主机目录（例如沿用已有的 `data/`），把 `docker-compose.yml` 中的 `screen-data:/app/data` 改成 `./data:/app/data`。Linux 上该目录必须对容器内 uid 1000 可写：
-
-```powershell
-mkdir -p data
-sudo chown -R 1000:1000 data
-```
-
-容器健康检查请求 `/api/config`，`docker compose ps` 中状态显示 `healthy` 即服务与接口正常。
-
-## 验证范围
-
-`npm test` 覆盖用户名门槛、公共大厅、成员与创建者权限、多人发流、15 分钟关闭边界、最后成员退出和重新加入取消关闭，以及原生窗口音频选项、音轨过滤、资源释放与快速切换竞态。时间边界使用模拟时钟验证，不需要等待 15 分钟。真实窗口音频和多端媒体链路仍需在支持的桌面 Chrome / Edge 及操作系统中验证；应用内预览浏览器可能无法完整支持 WebRTC / 屏幕采集。
-
-参考：[声网 Web 屏幕共享文档](https://docportal.shengwang.cn/cn/video-legacy/screensharing_web_ng)。
-
-窗口音频参考：[Chrome 141 发版说明](https://developer.chrome.com/release-notes/141)、[getDisplayMedia 选项](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)。
+- [声网 Web 屏幕共享文档](https://docportal.shengwang.cn/cn/video-legacy/screensharing_web_ng)
+- [getDisplayMedia 选项](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
+- [Chrome 141 发版说明](https://developer.chrome.com/release-notes/141)

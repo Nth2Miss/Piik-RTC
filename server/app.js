@@ -4,6 +4,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import agora from 'agora-token';
 import { RoomStore } from './room-store.js';
 import { RoomLifecycle, PRESENCE_LIFETIME, EMPTY_ROOM_TIMEOUT } from './room-lifecycle.js';
+import { usernameError } from './username.js';
 
 const secret = () => randomBytes(24).toString('base64url');
 const hour = 3600;
@@ -24,6 +25,9 @@ export function createApp(env = process.env, store = new RoomStore()) {
   sweepTimer.unref();
   app.locals.sweep = () => lifecycle.sweep();
   app.locals.close = () => { clearInterval(sweepTimer); store.close(); };
+  app.locals.sessions = sessions;
+  app.locals.lifecycle = lifecycle;
+  app.locals.notifyRoom = () => {};
   const configured = /^[a-f\d]{32}$/i.test(env.AGORA_APP_ID || '') && /^[a-f\d]{32}$/i.test(env.AGORA_APP_CERTIFICATE || '');
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
@@ -49,10 +53,16 @@ export function createApp(env = process.env, store = new RoomStore()) {
   });
   const participants = id => lifecycle.active(id)
     .map(s => ({ uid: s.uid, name: s.name, sharing: s.sharing, isOwner: s.isOwner }));
+  const duplicateName = (roomId, identity, name) => {
+    const lower = name.toLocaleLowerCase();
+    return lifecycle.active(roomId).some(s => s.userId !== identity && s.name.toLocaleLowerCase() === lower);
+  };
   const publicRoom = (room, identity) => ({ id: room.id, name: room.name, description: room.description,
     createdAt: room.createdAt, updatedAt: room.updatedAt, inviteKey: room.inviteKey,
     isOwner: room.ownerId === identity, onlineCount: participants(room.id).length,
     closesAt: room.emptySince === null ? null : room.emptySince + EMPTY_ROOM_TIMEOUT });
+  app.locals.participants = participants;
+  app.locals.publicRoom = publicRoom;
   function access(req, res, next) {
     lifecycle.sweep();
     const room = store.get(req.params.id);
@@ -68,11 +78,17 @@ export function createApp(env = process.env, store = new RoomStore()) {
     req.session = session;
     next();
   }
-  app.get('/api/config', (_req, res) => res.json({ configured }));
+  app.get('/api/config', (_req, res) => res.json({ configured, realtime: true }));
   app.get('/api/profile', (req, res) => res.json({ name: store.profile(req.identity)?.name || null }));
   app.post('/api/profile', (req, res) => {
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
-    if (!name || name.length > 24) return res.status(400).json({ error: '请输入 1–24 字的用户名。' });
+    const invalid = usernameError(name);
+    if (invalid) return res.status(400).json({ error: invalid });
+    for (const session of sessions.values()) {
+      if (session.userId === req.identity && duplicateName(session.roomId, req.identity, name)) {
+        return res.status(409).json({ error: `房间内已有用户名为「${name}」的成员，请换一个。` });
+      }
+    }
     store.setProfile(req.identity, name);
     for (const session of sessions.values()) if (session.userId === req.identity) session.name = name;
     res.json({ name });
@@ -109,6 +125,7 @@ export function createApp(env = process.env, store = new RoomStore()) {
     if (req.room.ownerId !== req.identity) return res.status(403).json({ error: '只有创建者可以关闭房间。' });
     store.archive(req.room.id);
     for (const [key, s] of sessions) if (s.roomId === req.room.id) sessions.delete(key);
+    app.locals.notifyRoom(req.room.id);
     res.json({ ok: true });
   });
   app.post('/api/rooms/:id/save', access, (req, res) => {
@@ -120,6 +137,11 @@ export function createApp(env = process.env, store = new RoomStore()) {
     let session = req.body?.sessionKey && sessions.get(req.body.sessionKey);
     if (req.body?.sessionKey && (!session || session.roomId !== req.room.id || session.userId !== req.identity)) return res.status(403).json({ error: '会话已失效，请重新进入房间。' });
     if (!session) {
+      const invalid = usernameError(req.profile.name);
+      if (invalid) return res.status(400).json({ error: invalid });
+      if (duplicateName(req.room.id, req.identity, req.profile.name)) {
+        return res.status(409).json({ error: `房间内已有用户名为「${req.profile.name}」的成员，请更换用户名后再进入。` });
+      }
       if ([...sessions.values()].filter(s => s.roomId === req.room.id).length >= 100) return res.status(429).json({ error: '房间会话已达上限，请稍后再试。' });
       const used = new Set([...sessions.values()].filter(s => s.roomId === req.room.id).map(s => s.uid));
       let uid;
@@ -136,16 +158,19 @@ export function createApp(env = process.env, store = new RoomStore()) {
       session.uid, agora.RtcRole.PUBLISHER, hour, hour);
     res.json({ appId: env.AGORA_APP_ID, token, uid: session.uid, sessionKey: session.key,
       expiresAt: session.expiresAt, room: publicRoom(store.get(req.room.id), req.identity), displayName: session.name });
+    app.locals.notifyRoom(req.room.id);
   });
   app.post('/api/rooms/:id/presence', access, ownSession, (req, res) => {
     if (req.session.expiresAt <= Date.now()) return res.status(403).json({ error: 'Token 已到期，请重新进入房间。' });
     req.session.lastSeen = Date.now();
     req.session.sharing = req.body.sharing === true;
     store.occupied(req.room.id, Date.now());
+    app.locals.notifyRoom(req.room.id);
     res.json({ participants: participants(req.room.id), room: publicRoom(store.get(req.room.id), req.identity) });
   });
   app.post('/api/rooms/:id/leave', access, ownSession, (req, res) => {
     lifecycle.leave(req.session.key);
+    app.locals.notifyRoom(req.room.id);
     res.json({ ok: true });
   });
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));

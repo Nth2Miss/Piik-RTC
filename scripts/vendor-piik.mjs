@@ -29,5 +29,13 @@ for (const relative of files.keys()) {
   fs.copyFileSync(path.join(source, relative), destination);
 }
 fs.copyFileSync(path.join(source, 'LICENSE'), path.join(target, 'LICENSE'));
-fs.writeFileSync(path.join(target, 'upstream.json'), JSON.stringify({ repository:'https://github.com/TNTcraftHIM/Piik', revision:process.argv[3], roots, files:Object.fromEntries(files) }, null, 2) + '\n');
-console.log(JSON.stringify({ files:files.size, external:[...external] }));
+// Static Piik artwork that Vite serves from the site root, kept outside the vendor tree.
+const staticFiles = ['public/favicon.svg'], staticHashes = {};
+for (const relative of staticFiles) {
+  const content = fs.readFileSync(path.join(source, relative));
+  staticHashes[relative] = crypto.createHash('sha256').update(content).digest('hex');
+  fs.mkdirSync('public', { recursive:true });
+  fs.copyFileSync(path.join(source, relative), path.join('public', path.basename(relative)));
+}
+fs.writeFileSync(path.join(target, 'upstream.json'), JSON.stringify({ repository:'https://github.com/TNTcraftHIM/Piik', revision:process.argv[3], roots, files:Object.fromEntries(files), static:staticHashes }, null, 2) + '\n');
+console.log(JSON.stringify({ files:files.size, external:[...external], static:staticFiles.length }));

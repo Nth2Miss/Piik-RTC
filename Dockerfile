@@ -6,7 +6,10 @@ ENV NODE_OPTIONS=--max-old-space-size=1024
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html tsconfig.json ./
+COPY public ./public
 COPY src ./src
+ARG VITE_AGORA_BADGE_URL
+ENV VITE_AGORA_BADGE_URL=${VITE_AGORA_BADGE_URL}
 RUN npm run build && npm prune --omit=dev
 
 # ---- 运行阶段：直接复用构建阶段裁剪后的依赖，不再重复安装 ----

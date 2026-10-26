@@ -4,7 +4,7 @@
 
 This project vendors and directly imports Piik's React living-room components, production styles, SVG artwork, tooltips, animations, theme controls and locale resources from [TNTcraftHIM/Piik](https://github.com/TNTcraftHIM/Piik), revision `066e218d84a237db41d455975c89a002eb3d0d79`.
 
-The original files are retained under `src/vendor/piik/`. `upstream.json` records their source paths and SHA-256 hashes; `scripts/vendor-piik.mjs` reproduces the import from an upstream checkout. The application adapter in `src/app.tsx` supplies the Agora room model and callbacks, and `src/room-service.ts` owns Agora transport and room API access. Piik's P2P/SFU transport and native desktop capture are not used.
+The original files are retained under `src/vendor/piik/`. `upstream.json` records their source paths and SHA-256 hashes; `scripts/vendor-piik.mjs` reproduces the import from an upstream checkout. The site favicon is also reused from Piik: `public/favicon.svg` is the upstream `public/favicon.svg` (recorded under `static` in `upstream.json`), and `public/favicon.png`, `public/favicon.ico` and `public/apple-touch-icon.png` are rendered from that SVG. The application adapter in `src/app.tsx` supplies the Agora room model and callbacks, and `src/room-service.ts` owns Agora transport and room API access. Piik's P2P/SFU transport and native desktop capture are not used.
 
 Copyright (c) 2026 TNTcraft and Piik contributors
 

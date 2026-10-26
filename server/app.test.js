@@ -43,7 +43,7 @@ function privileges(token) {
 test('configuration contains no credentials and missing config fails explicitly', async t => {
   const { owner } = await server(t, {});
   const config = await owner('/api/config');
-  assert.deepEqual(config.data, { configured: false });
+  assert.deepEqual(config.data, { configured: false, realtime: true });
   assert.equal(config.headers.get('cache-control'), 'no-store');
   assert.equal((await owner('/api/rooms', { name: '测试房间' })).status, 503);
 });
@@ -54,6 +54,24 @@ test('username is required before browsing the public room lobby', async t => {
   assert.equal((await visitor('/api/profile', { name: '  ' })).status, 400);
   assert.equal((await visitor('/api/profile', { name: '新朋友' })).status, 200);
   assert.equal((await visitor('/api/rooms')).status, 200);
+});
+test('rejects weak usernames', async t => {
+  const { browser } = await server(t);
+  const visitor = browser();
+  for (const name of ['1', '11', '111', '123', 'aaa', 'abc', 'qwerty']) {
+    assert.equal((await visitor('/api/profile', { name })).status, 400, name);
+  }
+  assert.equal((await visitor('/api/profile', { name: '李四' })).status, 200);
+});
+test('rejects duplicate names inside the same room', async t => {
+  const { browser, owner, guest } = await server(t);
+  const twin = browser('房主');
+  const room = (await owner('/api/rooms', { name: '重名测试' })).data;
+  const route = `/api/rooms/${room.id}/token`;
+  assert.equal((await owner(route, {})).status, 200);
+  assert.equal((await twin(route, {})).status, 409);
+  assert.equal((await guest(route, {})).status, 200);
+  assert.equal((await guest('/api/profile', { name: '房主' })).status, 409);
 });
 test('all named users see the same room lobby without exposing creator credentials', async t => {
   const { owner, guest, stranger } = await server(t);
@@ -154,7 +172,7 @@ test('rejects cross-origin writes and disables API response caching', async t =>
   assert.equal(created.status, 201); assert.equal(created.headers.get('cache-control'), 'no-store');
 });
 test('rooms and memberships persist after closing and reopening SQLite', async () => {
-  const filename = join(tmpdir(), `screen-room-test-${randomUUID()}.sqlite`);
+  const filename = join(tmpdir(), `piik-sw-test-${randomUUID()}.sqlite`);
   let store;
   try {
     store = new RoomStore(filename);
