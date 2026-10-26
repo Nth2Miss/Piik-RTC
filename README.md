@@ -35,7 +35,7 @@ npm run dev
 | `PORT` | 服务端口，默认 `3000` |
 | `PUBLIC_ORIGIN` | 对外 HTTPS 来源，如 `https://screen.example.com`，用于 Cookie 安全属性 |
 | `SCREEN_PORT` | Docker Compose 宿主机端口，默认 `3000` |
-| `VITE_AGORA_BADGE_URL` | 可选用量徽章地址，构建时写入前端；留空隐藏 |
+| `VITE_AGORA_BADGE_URL` | 可选用量徽章地址，构建时写入前端；预构建镜像由 GitHub Actions 仓库变量控制，`.env` 中的值仅本地构建生效；留空隐藏 |
 
 不要提交 `.env`。证书不要加 `VITE_` 前缀；徽章地址必须可以公开。
 
@@ -53,10 +53,12 @@ npm start
 配置好 `.env` 后执行：
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
-默认端口为 `3000`，可用 `SCREEN_PORT` 修改。徽章地址从 `.env` 读取，修改后需重新构建。
+Compose 会拉取 `ghcr.io/nth2miss/piik-sw:latest` 预构建镜像，默认端口为 `3000`，可用 `SCREEN_PORT` 修改。`pull_policy: always` 表示每次 `up` 都会检查并拉取最新 `latest`；需要固定版本时，把 `image` 改成 `v1.2.3` 这类标签。
+
+`VITE_AGORA_BADGE_URL` 是构建时变量，预构建镜像中的值由 GitHub Actions 的仓库变量 `VITE_AGORA_BADGE_URL` 决定，修改 `.env` 不会改变已拉取镜像里的徽章地址。需要自定义徽章或使用 fork 时，可自行构建镜像。私有 GHCR 包需先执行 `docker login ghcr.io`。
 
 ### 预构建镜像
 

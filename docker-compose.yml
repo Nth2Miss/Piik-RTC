@@ -1,10 +1,7 @@
 services:
   piik-sw:
-    build:
-      context: .
-      args:
-        VITE_AGORA_BADGE_URL: "${VITE_AGORA_BADGE_URL:-}"
-    image: piik-sw:latest
+    image: ghcr.io/nth2miss/piik-sw:latest
+    pull_policy: always
     container_name: piik-sw
     restart: unless-stopped
     env_file:
