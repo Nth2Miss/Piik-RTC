@@ -1,8 +1,8 @@
 # Piik-sw
 
-和朋友一起看屏幕的小客厅。基于声网 RTC Web SDK，沿用 [Piik](https://github.com/TNTcraftHIM/Piik) 的客厅界面。
+和朋友一起看屏幕的小客厅。基于声网 RTC Web SDK，沿用 [Piik](https://github.com/TNTcraftHIM/Piik) 的客厅界面。提供网页版和 Windows 桌面端。
 
-输入用户名即可创建或加入房间，无需注册或安装客户端。支持多人同时共享屏幕、窗口或标签页，点击成员切换观看。
+输入用户名即可创建或加入房间，无需注册。支持多人同时共享屏幕、窗口或标签页，点击成员切换观看。桌面端增加了原生程序/屏幕选择器、程序级声音采集，以及共享系统声音时过滤 Oopz / KOOK 等语音软件的能力。
 
 ## 功能
 
@@ -10,6 +10,9 @@
 - 按需连接 RTC，空闲时自动断开；空房间 15 分钟后自动关闭。
 - 实时连接统计、问题排查和脱敏诊断报告。
 - 亮暗主题、中英文切换、响应式布局。
+- 桌面端（Windows）：单文件约 6.4 MB、免安装，使用系统 WebView2，不打包 Chromium。
+- 桌面端提供程序/屏幕缩略图选择器、只共享某个程序的声音、共享系统声音并过滤语音软件。
+- 桌面端使用 Windows 进程回环采集音频，不采集麦克风或摄像头；音频组件已内置，不需要用户安装 .NET 运行时。
 
 ## 快速开始
 
@@ -25,6 +28,21 @@ npm run dev
 打开 [localhost:3000](http://localhost:3000)。PowerShell 用 `Copy-Item .env.example .env` 复制配置。
 
 屏幕共享需要 `localhost` 或 HTTPS。音频共享取决于浏览器、操作系统和所选来源；应用不采集摄像头或麦克风。
+
+### 桌面端
+
+桌面端是一个单文件、免安装的 Windows 程序，连接一台已部署的 Piik 服务器（不包含服务端）。构建：
+
+```bash
+npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/Piik.exe
+npm run desktop:build    # 构建单文件 release/Piik.exe
+```
+
+需要 Node.js 24+ 和 .NET 9 SDK（构建时发布内置音频组件）。运行需要系统 WebView2 运行时，Windows 11 和带 Edge 的 Windows 10 通常已自带。
+
+首次启动填写服务器地址；生产环境使用 HTTPS，本机调试可用 `http://localhost:3000`。程序声音和语音过滤需要 Windows 10 2004（19041）及以上。单文件约 6.4 MB，架构、限制和排障见 [docs/desktop.md](docs/desktop.md)。
+
+桌面端加载服务器上的网页前端，更新服务端网页资源后无需重新发布客户端。
 
 ### 环境变量
 
@@ -104,11 +122,17 @@ location /ws {
 | 路径 | 内容 |
 | --- | --- |
 | `src/` | 页面、播放器、房间与媒体状态管理 |
+| `src/desktop/` | 桌面端桥接、选择器、PCM 音频管线 |
 | `src/vendor/piik/` | 原样保留的 Piik 组件与资源 |
+| `desktop/PiikDesktop/` | C# WebView2 单文件主机、原生采集与 IPC |
+| `desktop/native/PiikAudio/` | C# WASAPI 系统/进程回环采集组件 |
 | `server/` | API、Token 签发、实时同步与房间存储 |
+| `scripts/build-desktop.mjs` | 发布音频组件、压缩嵌入并构建单文件 |
+| `scripts/desktop-dev.mjs` | 本地服务 + 桌面端开发启动 |
 | `scripts/vendor-piik.mjs` | 从上游重新导入 Piik |
+| `docs/desktop.md` | 桌面端架构、构建与限制 |
 
-运行 `npm test` 验证房间、权限、媒体状态和实时同步逻辑。真实多端共享需在桌面 Chrome / Edge 上验证。
+运行 `npm test` 验证房间、权限、媒体状态和实时同步逻辑。桌面端需要在 Windows 上实际验证程序/屏幕共享、程序声音和语音过滤；网页版使用桌面 Chrome / Edge 验证。
 
 ## 第三方与许可
 

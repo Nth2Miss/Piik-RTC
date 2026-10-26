@@ -3,8 +3,9 @@ import { encoderConfig, type Preferences } from './preferences.ts';
 
 export function displayOptions(p: Preferences) {
   const { width, height } = encoderConfig(p);
+  const frameRate = { ideal: p.fps, max: p.fps };
   return {
-    video: { width: { ideal: width as number }, height: { ideal: height as number }, frameRate: { ideal: p.fps, max: p.fps } },
+    video: p.resolution === 'native' ? { frameRate } : { width: { ideal: width as number }, height: { ideal: height as number }, frameRate },
     audio: p.audio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false,
     windowAudio: p.audio ? 'window' : 'exclude',
     systemAudio: p.audio ? 'include' : 'exclude',
@@ -39,7 +40,8 @@ export async function captureScreen(
     const rawVideo = stream.getVideoTracks()[0];
     if (!rawVideo) throw new Error('浏览器没有返回共享画面，请重新选择。');
     const surface = rawVideo.getSettings().displaySurface || 'unknown';
-    const config = encoderConfig(p);
+    const settings = rawVideo.getSettings();
+    const config = encoderConfig(p, { width: settings.width, height: settings.height });
     const video = sdk.createCustomVideoTrack({ mediaStreamTrack: rawVideo, ...config, optimizationMode: p.optimization });
     tracks.push(video);
     // Match audio to the selected source; unknown/older window captures cannot

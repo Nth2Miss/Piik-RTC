@@ -27,3 +27,11 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Microsoft Edge WebView2
+
+The Windows desktop host uses the [Microsoft Edge WebView2](https://learn.microsoft.com/microsoft-edge/webview2/) runtime installed on the machine and the `Microsoft.Web.WebView2` SDK. The runtime is not bundled with Piik; it is a system component governed by the Microsoft Edge terms. The SDK's managed assemblies and loader are redistributed as part of the single-file host under their license.
+
+## .NET
+
+The desktop host runs on .NET Framework 4.8, which is a Windows component. The native audio helper (`desktop/native/PiikAudio`) is published as a self-contained .NET 9 application. .NET is distributed under the MIT License; the runtime license and third-party notices are included with the published helper.

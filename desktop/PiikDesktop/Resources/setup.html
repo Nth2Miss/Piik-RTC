@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>连接 Piik 服务器</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f3f5f8;
+      --paper: #fff;
+      --ink: #1b2430;
+      --muted: #6b7787;
+      --line: #e2e7ee;
+      --action: #2f7cf6;
+      --action-ink: #fff;
+      --danger: #c53b3b;
+      --shadow: 0 24px 70px rgba(27, 47, 79, .16);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101722;
+        --paper: #182231;
+        --ink: #e9eef6;
+        --muted: #97a5b8;
+        --line: #2a3748;
+        --action: #4d91ff;
+        --danger: #ff8585;
+        --shadow: 0 24px 80px rgba(0, 0, 0, .45);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      background:
+        radial-gradient(900px 500px at 15% 0%, color-mix(in srgb, var(--action) 12%, transparent), transparent 65%),
+        radial-gradient(700px 420px at 95% 100%, color-mix(in srgb, #59d3b3 10%, transparent), transparent 60%),
+        var(--bg);
+      color: var(--ink);
+      font: 14px/1.65 "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+    }
+    .card {
+      width: min(460px, 100%);
+      padding: 34px 34px 28px;
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      margin-bottom: 22px;
+      border-radius: 18px;
+      background: linear-gradient(145deg, #3f8cff, #1f5dd6);
+      color: #fff;
+      font: 800 27px/1 "Segoe UI", sans-serif;
+      letter-spacing: -1px;
+      box-shadow: 0 10px 24px rgba(47, 124, 246, .3);
+    }
+    h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: -.4px; }
+    .lead { margin: 0 0 24px; color: var(--muted); font-size: 12.5px; }
+    label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 650; }
+    input {
+      width: 100%;
+      height: 46px;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--bg);
+      color: var(--ink);
+      font: 13px "Segoe UI", system-ui, sans-serif;
+      outline: none;
+      transition: border-color 140ms, box-shadow 140ms;
+    }
+    input:focus { border-color: var(--action); box-shadow: 0 0 0 3px color-mix(in srgb, var(--action) 18%, transparent); }
+    .actions { display: flex; gap: 10px; margin-top: 16px; }
+    button {
+      flex: 1;
+      height: 44px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      font: 600 13px "Microsoft YaHei UI", system-ui, sans-serif;
+      cursor: pointer;
+      transition: transform 120ms, opacity 120ms, background 120ms;
+    }
+    button:active { transform: scale(.985); }
+    button:disabled { opacity: .55; cursor: wait; }
+    .primary { background: var(--action); color: var(--action-ink); box-shadow: 0 8px 20px color-mix(in srgb, var(--action) 30%, transparent); }
+    .secondary { border-color: var(--line); background: transparent; color: var(--ink); }
+    .secondary[hidden] { display: none; }
+    .error {
+      margin: 14px 0 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+      color: var(--danger);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .error[hidden] { display: none; }
+    .hint { margin: 18px 0 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
+    .hint code { padding: 1px 5px; border-radius: 5px; background: var(--bg); font: 11px Consolas, monospace; }
+    .footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 22px; color: var(--muted); font-size: 10.5px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">P</div>
+    <h1>连接 Piik 服务器</h1>
+    <p class="lead">桌面端需要连接一个已部署的 Piik 服务。程序、窗口和声音采集都在本机完成。</p>
+    <form id="form">
+      <label for="server">服务器地址</label>
+      <input id="server" name="server" type="url" placeholder="https://piik.example.com" autocomplete="url" spellcheck="false" required/>
+      <div class="actions">
+        <button class="primary" id="connect" type="submit">连接</button>
+        <button class="secondary" id="back" type="button" hidden>返回应用</button>
+      </div>
+      <p class="error" id="error" hidden></p>
+    </form>
+    <p class="hint">支持 <code>https://</code> 地址；本机调试可以使用 <code>http://localhost:3000</code>。邀请链接和房间数据来自同一台服务器。</p>
+    <footer class="footer"><span id="version"></span><span>Piik 桌面端</span></footer>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const bridge = window.piikDesktop;
+    const input = document.getElementById('server');
+    const form = document.getElementById('form');
+    const connect = document.getElementById('connect');
+    const back = document.getElementById('back');
+    const errorBox = document.getElementById('error');
+    const version = document.getElementById('version');
+
+    const saved = params.get('url') || '';
+    input.value = saved || 'http://localhost:3000';
+    version.textContent = params.get('version') ? `v${params.get('version')}` : '';
+    back.hidden = !saved;
+
+    const queryError = params.get('error');
+    if (queryError) showError(queryError);
+
+    function showError(message) {
+      errorBox.hidden = !message;
+      errorBox.textContent = message || '';
+    }
+
+    if (!bridge) {
+      showError('请通过 Piik 桌面端打开此页面。');
+      connect.disabled = true;
+    }
+
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      showError('');
+      connect.disabled = true;
+      connect.textContent = '正在连接…';
+      try {
+        const result = await bridge.setServer(input.value.trim());
+        if (!result || !result.ok) showError(result?.message || '无法连接这个服务器。');
+      } catch (error) {
+        showError(error?.message || String(error));
+      } finally {
+        connect.disabled = false;
+        connect.textContent = '连接';
+      }
+    });
+
+    back.addEventListener('click', async () => {
+      if (!bridge) return;
+      back.disabled = true;
+      try { await bridge.cancelSetup(); } catch { /* keep setup visible */ }
+      back.disabled = false;
+    });
+  </script>
+</body>
+</html>

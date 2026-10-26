@@ -1,0 +1,103 @@
+# Piik 桌面端
+
+桌面端是一个 **单文件、免安装** 的 Windows 程序（约 6.4 MB），不是网页套壳：
+
+- 使用系统自带的 Microsoft Edge WebView2 加载现有 React 界面和声网 RTC Web SDK。
+- C# 主程序负责窗口枚举、缩略图、画面采集和 IPC，不引入 Electron/Chromium 运行时。
+- 内置一个自包含的 .NET 9 音频组件，使用 Windows 进程回环采集声音；发行时压缩嵌入主程序，运行时释放。
+- 自定义“程序 / 屏幕”选择器，支持只共享某个程序的声音，以及共享系统声音时过滤 Oopz / KOOK / Discord 等语音软件。
+
+## 使用方式
+
+1. 运行 `release/Piik.exe`。单文件，不需要安装。
+2. 首次启动填写已部署的 Piik 服务器地址：
+   - 生产环境必须使用 `https://`。
+   - 本机调试可以使用 `http://localhost:3000`。
+3. 地址保存在 `%LOCALAPPDATA%\PiikDesktop\config.json`；菜单“文件 → 服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。
+
+桌面端加载服务器上的网页前端，所以服务端更新后界面也会更新；只有桌面壳或原生采集改动才需要重新发布客户端。
+
+## 系统要求
+
+- Windows 10 2004（build 19041）或更高版本，推荐 Windows 11。
+- Microsoft Edge WebView2 运行时。Windows 11 和带 Edge 的 Windows 10 通常已经自带；缺失时程序会提示安装。
+- 程序声音和语音过滤依赖 Windows 进程回环 API；低于 19041 时只能共享系统声音。
+- 网页版仍然可以使用浏览器自带选择器，不需要安装桌面端。
+
+## 架构
+
+```
+Piik.exe（C# / .NET Framework 4.8 / WinForms / WebView2）
+├─ WebView2 加载远程 Piik 页面
+│   └─ 注入 shim.js，暴露 window.piikDesktop
+├─ 原生窗口/屏幕选择器
+│   ├─ EnumWindows + PrintWindow 缩略图
+│   └─ GDI 采集 → 缩放 → JPEG → WebView2 消息
+└─ 内嵌 PiikAudio.exe（.NET 9，自包含，压缩嵌入）
+    └─ WASAPI 系统回环 / 进程回环 include/exclude
+        └─ PCM → 主程序 → WebView2 消息
+```
+
+渲染端把 JPEG 帧画到隐藏 canvas，再通过 `canvas.captureStream()` 得到视频轨，交给声网 SDK 发布；音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给声网。
+
+## 原生采集
+
+- **画面**：`PrintWindow(PW_RENDERFULLCONTENT)` 捕获窗口，`CopyFromScreen` 捕获屏幕；按目标分辨率等比缩放（不放大），JPEG 质量约 72。最小化的窗口不会出现在列表里；个别受保护或特殊渲染的窗口可能返回黑帧。
+- **音频**：与网页版相同的 WASAPI shared-mode 回环。系统模式请求 48 kHz / 16-bit / stereo，失败时回退 44.1 kHz；程序模式使用 Windows 进程回环的 include/exclude 进程树。
+- **语音过滤**：一次排除一个进程树，默认选择检测到的 Oopz / KOOK 等语音软件。语音软件重启后，请停止并重新开始共享。
+- **声音来源**：选择窗口时可以只共享该程序的声音；选择屏幕时可以共享整个系统声音并选择要过滤的语音软件。
+
+## 构建
+
+前置条件：
+
+- Node.js 24+（构建网页资源和运行脚本）。
+- .NET 9 SDK（发布自包含音频组件；首次还原 NuGet 包需要网络）。
+- Windows 10/11；系统 WebView2 运行时只用于运行，不打进安装包。
+
+```bash
+npm install
+npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/Piik.exe（带 9222 调试端口）
+npm run desktop:build    # 发布音频组件、压缩嵌入、构建单文件 release/Piik.exe
+npm run desktop:helper   # 只发布 desktop/bin/PiikAudio.exe，便于单独调试音频
+```
+
+构建流程：
+
+1. `dotnet publish` 把 `desktop/native/PiikAudio` 发布成裁剪、自包含的 12.8 MB 单文件。
+2. 用 gzip 压缩到约 5.8 MB，写入 `desktop/PiikDesktop/Resources/PiikAudio.exe.gz`。
+3. `dotnet build` 构建 C# 主机；Costura 把 WebView2 托管 DLL 嵌入 exe，音频组件作为资源嵌入。
+4. 输出 `release/Piik.exe`，约 6.4 MB。
+
+首次运行会把音频组件释放到 `%TEMP%\PiikDesktop\audio\PiikAudio.exe`；WebView2 用户数据在 `%LOCALAPPDATA%\PiikDesktop\WebView2`。
+
+## 体积
+
+| 项目 | 大小 |
+| --- | --- |
+| `release/Piik.exe`（单文件） | 约 6.4 MB |
+| 其中压缩后的音频组件 | 约 5.8 MB |
+| 主机 + WebView2 托管 DLL | 约 0.6 MB |
+| WebView2 运行时 | 系统自带，不随程序分发 |
+
+这比 Electron 方案的安装包（约 112 MB）小一个数量级。代价是画面通过 JPEG 帧桥接，而不是浏览器原生屏幕采集；1080p/30fps 会占用一定 CPU，遇到卡顿可以在选择器里降到 720p 或 15/24fps。
+
+## 限制与排障
+
+| 现象 | 检查 |
+| --- | --- |
+| 提示无法启动 WebView2 | 安装 Microsoft Edge WebView2 运行时；Windows 11 通常已自带 |
+| 列表里没有某窗口 | 最小化的窗口不会被列出，先恢复窗口再刷新 |
+| 程序声音没有声音 | 确认 Windows 版本 ≥ 19041；该程序的声音可能不在窗口进程树内，改用共享屏幕 |
+| 过滤后仍有回声 | 语音软件可能已重启；重新开始共享，并在选择器中确认选中的是当前语音软件 |
+| 画面卡顿 | 降到 720p / 15fps，或提高共享码率；原画 + 60fps 对 JPEG 桥接和 CPU 压力较大 |
+| 某窗口画面全黑 | 该窗口可能禁止 PrintWindow 捕获；改为共享整个屏幕 |
+| 无法连接服务器 | 在设置页重新填写地址；生产环境使用 HTTPS，自签名证书不会被接受 |
+
+## 安全边界
+
+- WebView2 只允许导航到配置的服务器来源；外部链接交给系统浏览器打开。
+- 原生 IPC 会校验消息来源；只有本地设置页可以修改服务器地址。
+- 共享来源由用户在原生选择器中明确选择；关闭选择器会清空待共享来源。
+- 音频组件只读取系统/进程音频，不采集麦克风或摄像头。
+- 程序未签名，首次运行可能出现 SmartScreen 提示。

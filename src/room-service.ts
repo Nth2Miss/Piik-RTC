@@ -1,5 +1,7 @@
 import AgoraRTC, { type ILocalAudioTrack, type ILocalVideoTrack, type IRemoteVideoTrack, type UID } from 'agora-rtc-sdk-ng';
 import { captureScreen, type CapturedScreen } from './capture';
+import { captureDesktopScreen } from './desktop/capture.ts';
+import { desktopAudioLabel, type CaptureSelection } from './desktop/bridge.ts';
 import { defaults, normalizePreferences, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
 import { usernameError } from './username';
@@ -466,10 +468,12 @@ export function createRoomService() {
     const id = new URLSearchParams(location.hash.slice(1)).get('room');
     if (id && /^[a-f0-9]{12}$/.test(id)) await enter(await api<Room>(`/api/rooms/${id}`));
   }
-  async function share() {
-    if (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
+  async function share(selection?: CaptureSelection) {
+    if (!selection && (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia)) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
     // Capture first: getDisplayMedia must run while the click's activation is still valid.
-    const next = await captureScreen(state.preferences, AgoraRTC);
+    const next = selection
+      ? await captureDesktopScreen(selection, state.preferences, AgoraRTC, message => notify(message, true))
+      : await captureScreen(state.preferences, AgoraRTC);
     const video = next.tracks[0] as ILocalVideoTrack;
     let ended = false;
     next.onEnded(() => { ended = true; if (tracks.includes(video)) void stop(); });
@@ -481,9 +485,12 @@ export function createRoomService() {
       if (ended || !joined) { await client.unpublish(next.tracks).catch(() => {}); throw new Error('共享已停止，请重新选择。'); }
       tracks = next.tracks; capture = next; source.setLocal(state.uid!, video);
       await source.select(state.uid);
-      const audio = next.surface === 'monitor' ? '系统' : next.surface === 'window' ? '窗口' : '标签页';
-      emit({ caption:`${state.preferences.resolution}p · ${state.preferences.fps} fps · ${next.hasAudio ? `含${audio}音频` : '仅画面'}，切换观看会保留你的共享。` });
-      if (state.preferences.audio && !next.hasAudio) notify(`未获得${audio}音轨，本次仅共享画面。请在浏览器选择器中勾选共享音频。`);
+      const audio = selection
+        ? desktopAudioLabel(selection, next.hasAudio)
+        : next.surface === 'monitor' ? '系统' : next.surface === 'window' ? '窗口' : '标签页';
+      const resolution = state.preferences.resolution === 'native' ? '原画' : `${state.preferences.resolution}p`;
+      emit({ caption:`${resolution} · ${state.preferences.fps} fps · ${next.hasAudio ? audio : '仅画面'}，切换观看会保留你的共享。` });
+      if (!selection && state.preferences.audio && !next.hasAudio) notify(`未获得${audio}音轨，本次仅共享画面。请在浏览器选择器中勾选共享音频。`);
       void heartbeat();
     } catch (error) { next.close(); throw error; }
   }
@@ -569,7 +576,7 @@ export function createRoomService() {
     }),
     leave:() => run(async () => { await leave(); await refreshRooms(); }),
     changeName:() => run(async () => { if (joined) await leave(); confirmed = false; emit({ view:'welcome' }); }),
-    share:() => run(share), stop:() => run(() => stop()), select,
+    share:(selection?: CaptureSelection) => run(() => share(selection)), stop:() => run(() => stop()), select,
     setPlaybackPaused: (paused: boolean) => source.setPaused(paused),
     savePreferences(value:Preferences) {
       const preferences = normalizePreferences(value);
