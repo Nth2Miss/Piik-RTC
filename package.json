@@ -1,6 +1,6 @@
 {
   "name": "piik-rtc",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Piik-RTC：多人屏幕共享与语音客厅，支持声网、即构和火山引擎 RTC。",
   "license": "MIT",
   "private": true,

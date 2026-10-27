@@ -19,6 +19,7 @@ namespace PiikDesktop
         private ContextMenuStrip _contextMenu;
         private string _serverOrigin = "";
         private bool _showingSetup;
+        private readonly bool _debug;
         private FormWindowState _stateBeforeFullscreen = FormWindowState.Normal;
         private FormBorderStyle _borderBeforeFullscreen = FormBorderStyle.Sizable;
 
@@ -28,9 +29,9 @@ namespace PiikDesktop
         public MainForm(AppConfig config, string[] args)
         {
             _config = config;
-            var debug = Array.Exists(args, argument => string.Equals(argument, "--debug", StringComparison.OrdinalIgnoreCase));
+            _debug = Array.Exists(args, argument => string.Equals(argument, "--debug", StringComparison.OrdinalIgnoreCase));
             _browserArguments = "--autoplay-policy=no-user-gesture-required";
-            if (debug) _browserArguments += " --remote-debugging-port=9222 --remote-allow-origins=*";
+            if (_debug) _browserArguments += " --remote-debugging-port=9222 --remote-allow-origins=*";
 
             Text = "Piik-RTC";
             MinimumSize = new Size(980, 640);
@@ -107,6 +108,7 @@ namespace PiikDesktop
             {
                 if (_webView?.CoreWebView2 != null) _webView.CoreWebView2.OpenDevToolsWindow();
             }));
+            _contextMenu.Items.Add(new ToolStripMenuItem("检查更新…", null, (_, __) => { _ = UpdateChecker.CheckAsync(this, true); }));
             _contextMenu.Items.Add(new ToolStripSeparator());
             _contextMenu.Items.Add(new ToolStripMenuItem("退出", null, (_, __) => Close()));
         }
@@ -176,6 +178,7 @@ namespace PiikDesktop
 
                 if (string.IsNullOrWhiteSpace(_config.ServerUrl)) ShowSetup("");
                 else NavigateServer(_config.ServerUrl);
+                if (!_debug && !IsDisposed) _ = UpdateChecker.CheckAsync(this, false);
             }
             catch (Exception exception)
             {

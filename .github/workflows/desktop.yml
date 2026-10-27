@@ -59,8 +59,10 @@ jobs:
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Piik-RTC-desktop
-          path: release/Piik.exe
+          name: Piik-RTC-desktop-v${{ steps.version.outputs.version }}
+          path: |
+            release/Piik-v${{ steps.version.outputs.version }}.exe
+            release/version.json
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -69,6 +71,8 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: Piik-RTC v${{ steps.version.outputs.version }}
-          files: release/Piik.exe
+          files: |
+            release/Piik-v${{ steps.version.outputs.version }}.exe
+            release/version.json
           generate_release_notes: true
           fail_on_unmatched_files: true

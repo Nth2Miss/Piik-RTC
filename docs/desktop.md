@@ -9,7 +9,7 @@
 
 ## 使用方式
 
-1. 运行 `release/Piik.exe`。单文件，不需要安装。
+1. 运行 `release/Piik-v<版本>.exe`。单文件，不需要安装。
 2. 首次启动填写已部署的 Piik-RTC 服务器地址：
    - 生产环境必须使用 `https://`。
    - 本机调试可以使用 `http://localhost:3000`。
@@ -17,6 +17,16 @@
 3. 地址保存在 `%LOCALAPPDATA%\PiikDesktop\config.json`；在窗口内右键打开菜单，选择“服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。优先级：启动参数 > 环境变量 > 已保存配置 > 构建时内嵌地址。
 
 桌面端加载服务器上的网页前端，所以服务端更新后界面也会更新；只有桌面壳或原生采集改动才需要重新发布客户端。
+
+## 自动更新
+
+启动后会在后台读取 GitHub Releases 的 `version.json`，与当前程序集版本比较。发现新版本时会提示下载，下载过程显示进度，完成后校验下载文件的程序集版本，再通过 PowerShell 辅助进程在程序退出后启动新版本并删除旧文件。
+
+- 版本信息优先通过 `https://v4.gh-proxy.org/https://github.com/.../releases/latest/download/version.json` 获取，失败后回退 GitHub 直连。
+- 程序文件同样优先通过 `v4.gh-proxy.org` 下载，失败后回退 `github.com` 原始地址。
+- 更新会下载到当前 exe 所在目录，因此程序需要放在有写权限的位置；放在受保护目录时请手动下载替换。
+- 右键菜单中的“检查更新…”可以手动检查；设置环境变量 `PIIK_DISABLE_UPDATE=1` 可以跳过启动检查。
+- 由于文件名带版本号，更新后启动的是新文件，新版本启动后会删除旧版本文件。旧快捷方式可能需要重新指向新文件。
 
 ## 系统要求
 
@@ -29,7 +39,7 @@
 ## 架构
 
 ```
-Piik.exe（C# / .NET Framework 4.8 / WinForms / WebView2）
+Piik-v<版本>.exe（C# / .NET Framework 4.8 / WinForms / WebView2）
 ├─ WebView2 加载远程 Piik 页面
 │   └─ 注入 shim.js，暴露 window.piikDesktop
 ├─ 原生窗口/屏幕选择器
@@ -60,8 +70,8 @@ Piik.exe（C# / .NET Framework 4.8 / WinForms / WebView2）
 
 ```bash
 npm install
-npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/Piik.exe（带 9222 调试端口）
-npm run desktop:build    # 发布音频组件、压缩嵌入、构建单文件 release/Piik.exe
+npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/Piik-v<版本>.exe（带 9222 调试端口）
+npm run desktop:build    # 发布音频组件、压缩嵌入、构建单文件 release/Piik-v<版本>.exe
 npm run desktop:helper   # 只发布 desktop/bin/PiikAudio.exe，便于单独调试音频
 ```
 
@@ -75,14 +85,14 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 
 内嵌地址会写入 exe，首次启动直接连接该服务器，不需要用户填写。用户仍可以在窗口内右键打开菜单，选择“服务器设置…”修改；`--server` 启动参数和 `PIIK_SERVER_URL` 环境变量也会覆盖它。`desktop:build:embed` 必须通过 `--server` 或 `PIIK_DEFAULT_SERVER_URL` 指定地址；构建脚本也接受环境变量 `PIIK_DEFAULT_SERVER_URL`，便于 CI 使用。
 
-版本号取自 `package.json`，构建时写入桌面程序集，并显示在网页帮助页和桌面服务器设置页。发布前先提升版本（例如 `npm version patch --no-git-tag-version`）；推送到 master/main 后，`.github/workflows/desktop.yml` 会构建 exe、上传 artifact，并按该版本创建/更新 GitHub Release。推送匹配的 `v<version>` tag 仍会校验 tag 与版本号一致。
+版本号取自 `package.json`，构建时写入桌面程序集，并显示在网页帮助页和桌面服务器设置页。发布前先提升版本（例如 `npm version patch --no-git-tag-version`）；推送到 master/main 后，`.github/workflows/desktop.yml` 会构建 `Piik-v<版本>.exe` 和 `version.json`、上传 artifact，并按该版本创建/更新 GitHub Release。推送匹配的 `v<version>` tag 仍会校验 tag 与版本号一致。
 
 构建流程：
 
 1. `dotnet publish` 把 `desktop/native/PiikAudio` 发布成裁剪、自包含的 12.8 MB 单文件。
 2. 用 gzip 压缩到约 5.8 MB，写入 `desktop/PiikDesktop/Resources/PiikAudio.exe.gz`。
 3. `dotnet build` 构建 C# 主机；Costura 把 WebView2 托管 DLL 嵌入 exe，音频组件作为资源嵌入。
-4. 输出 `release/Piik.exe`，约 6.4 MB。
+4. 输出 `release/Piik-v<版本>.exe`（约 6.4 MB）和 `release/version.json`。
 
 首次运行会把音频组件释放到 `%TEMP%\PiikDesktop\audio\PiikAudio.exe`；WebView2 用户数据在 `%LOCALAPPDATA%\PiikDesktop\WebView2`。
 
@@ -90,7 +100,7 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 
 | 项目 | 大小 |
 | --- | --- |
-| `release/Piik.exe`（单文件） | 约 6.4 MB |
+| `release/Piik-v<版本>.exe`（单文件） | 约 6.4 MB |
 | 其中压缩后的音频组件 | 约 5.8 MB |
 | 主机 + WebView2 托管 DLL | 约 0.6 MB |
 | WebView2 运行时 | 系统自带，不随程序分发 |

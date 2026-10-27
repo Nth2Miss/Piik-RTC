@@ -100,6 +100,9 @@ console.log(`桌面端版本：${packageVersion || '未知'}`);
 if (embeddedServer) console.log(`内嵌服务端：${embeddedServer}`);
 
 mkdirSync(release, { recursive: true });
-const target = path.join(release, 'Piik.exe');
+const target = path.join(release, packageVersion ? `Piik-v${packageVersion}.exe` : 'Piik.exe');
 writeFileSync(target, readFileSync(hostExe));
+const manifest = path.join(release, 'version.json');
+writeFileSync(manifest, JSON.stringify({ version: packageVersion, exe: path.basename(target) }) + '\n');
 console.log(`单文件桌面端：${target}（${(statSync(target).size / 1024 / 1024).toFixed(2)} MB）`);
+console.log(`版本清单：${manifest}`);

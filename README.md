@@ -50,8 +50,8 @@ docker compose up -d
 桌面端是一个单文件、免安装的 Windows 程序，连接一台已部署的 Piik-RTC 服务器（不包含服务端）。构建：
 
 ```bash
-npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/Piik.exe
-npm run desktop:build    # 构建单文件 release/Piik.exe
+npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/Piik-v<版本>.exe
+npm run desktop:build    # 构建单文件 release/Piik-v<版本>.exe
 npm run desktop:build -- --server=https://piik.example.com   # 内嵌默认服务器
 ```
 
@@ -59,7 +59,7 @@ npm run desktop:build -- --server=https://piik.example.com   # 内嵌默认服�
 
 首次启动填写服务器地址；生产环境使用 HTTPS，本机调试可用 `http://localhost:3000`。构建时传入 `--server` 可以内嵌默认服务器，首次启动直接连接；用户仍可在窗口内右键打开菜单，选择“服务器设置…”修改。程序声音和语音过滤需要 Windows 10 2004（19041）及以上。单文件约 6.4 MB，架构、限制和排障见 [docs/desktop.md](docs/desktop.md)。
 
-版本号来自 `package.json`，显示在网页右上角问号的帮助页和桌面服务器设置页。发版前请提升版本（例如 `npm version patch --no-git-tag-version`）；推送到 master/main 后，`Desktop` workflow 会构建 `Piik.exe` 并按该版本创建/更新 GitHub Release。推送匹配的 `v<版本>` tag 仍会校验 tag 与版本号一致。
+版本号来自 `package.json`，显示在网页右上角问号的帮助页和桌面服务器设置页。发版前请提升版本（例如 `npm version patch --no-git-tag-version`）；推送到 master/main 后，`Desktop` workflow 会构建 `Piik-v<版本>.exe` 和 `version.json`，并按该版本创建/更新 GitHub Release。桌面端启动时会检查最新版本，有新版时提示下载并自动重启；更新优先通过 `https://v4.gh-proxy.org` 加速，失败后回退 GitHub 直连。推送匹配的 `v<版本>` tag 仍会校验 tag 与版本号一致。
 
 桌面端加载服务器上的网页前端，更新服务端网页资源后无需重新发布客户端。桌面端同样支持声网、即构和火山引擎房间；即构共享画面最高为 1080P、码率最高为 10 Mbps，选择 1440P/原画或 12/16 Mbps 时会自动按 1080P / 10 Mbps 采集。
 

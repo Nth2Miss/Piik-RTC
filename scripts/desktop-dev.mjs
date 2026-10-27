@@ -1,11 +1,12 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
 const port = Number(process.env.PORT || 3000);
 const url = `http://localhost:${port}`;
-const executable = path.join(root, 'release', 'Piik.exe');
+const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+const executable = path.join(root, 'release', `Piik-v${version}.exe`);
 
 if (!existsSync(executable)) {
   console.log('单文件桌面端尚未构建，正在构建…');
