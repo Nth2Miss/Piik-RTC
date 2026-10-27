@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import WebSocket from 'ws';
-import { createApp } from './app.js';
-import { attachRealtime } from './realtime.js';
+import { createApp } from '../app.js';
+import { attachRealtime } from '../rooms/realtime.js';
+import { RoomStore } from '../rooms/store.js';
 
 const credentials = { AGORA_APP_ID: 'a'.repeat(32), AGORA_APP_CERTIFICATE: 'b'.repeat(32) };
 
@@ -69,4 +70,24 @@ test('websocket pushes sharing changes without client polling', async t => {
   hostSocket.send(JSON.stringify({ type: 'presence', sharing: true }));
   const pushed = await update;
   assert.equal(pushed.participants.find(person => person.uid === host.uid).sharing, true);
+});
+
+test('低于 15 分钟立即通知成员并拒绝房间续期', async t => {
+  let remaining = 10000;
+  const app = createApp(credentials, new RoomStore(), { usageService: async () => ({ agora:{ status:'ok', remaining, total:10000 }, volc:{ status:'unavailable' }, zego:{ status:'unavailable' } }) });
+  const server = createServer(app); const realtime = attachRealtime(server, app, credentials);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port, base = `http://127.0.0.1:${port}`;
+  const cookie = (await call(base, undefined, '/api/profile', { name:'房主' })).cookie;
+  const room = (await call(base, cookie, '/api/rooms', { name:'限额房间' })).data;
+  const token = (await call(base, cookie, `/api/rooms/${room.id}/token`, {})).data;
+  const socket = await connect(port, cookie);
+  t.after(async () => { socket.terminate(); realtime.close(); await new Promise(resolve => server.close(resolve)); app.locals.close(); });
+  socket.send(JSON.stringify({ type:'subscribe', roomId:room.id, sessionKey:token.sessionKey }));
+  await waitFor(socket, message => message.type === 'room');
+  const closed = waitFor(socket, message => message.type === 'closed');
+  remaining = 14.9; await app.locals.monitor.check();
+  assert.match((await closed).reason, /不足 15 分钟/);
+  const renewal = await call(base, cookie, `/api/rooms/${room.id}/token`, { sessionKey:token.sessionKey });
+  assert.equal(renewal.status, 404); assert.match(renewal.data.error, /不足 15 分钟/);
 });

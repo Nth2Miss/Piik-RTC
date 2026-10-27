@@ -1,16 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createApp } from './app.js';
-import { RoomStore } from './room-store.js';
+import { createApp } from '../app.js';
+import { RoomStore } from '../rooms/store.js';
 import { inflateSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createDecipheriv, createHmac } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
 const credentials = { AGORA_APP_ID: 'a'.repeat(32), AGORA_APP_CERTIFICATE: 'b'.repeat(32) };
-async function server(t, env = credentials) {
-  const app = createApp(env);
+async function server(t, env = credentials, options = {}) {
+  const app = createApp(env, new RoomStore(), options);
   const instance = app.listen(0, '127.0.0.1');
   await new Promise(resolve => instance.once('listening', resolve));
   t.after(async () => { await new Promise(resolve => instance.close(resolve)); app.locals.close(); });
@@ -43,9 +43,73 @@ function privileges(token) {
 test('configuration contains no credentials and missing config fails explicitly', async t => {
   const { owner } = await server(t, {});
   const config = await owner('/api/config');
-  assert.deepEqual(config.data, { configured: false, realtime: true });
+  assert.deepEqual(config.data, { configured: false, realtime: true, providers: { agora: false, zego: false, volc: false } });
   assert.equal(config.headers.get('cache-control'), 'no-store');
   assert.equal((await owner('/api/rooms', { name: '测试房间' })).status, 503);
+});
+test('创建房间时空名称使用创建者用户名，编辑时仍需填写名称', async t => {
+  const { owner } = await server(t);
+  for (const body of [{}, {name:''}, {name:'   '}, {name:' 自定义 '}]) {
+    const result = await owner('/api/rooms', body);
+    assert.equal(result.status, 201);
+    assert.equal(result.data.name, body.name?.trim() || '房主');
+    if (!body.name?.trim()) assert.equal((await owner(`/api/rooms/${result.data.id}`, {name:'   '}, 'PATCH')).status, 400);
+  }
+  assert.equal((await owner('/api/rooms', {name:'x'.repeat(41)})).status, 400);
+  assert.equal((await owner('/api/rooms', {name:123})).status, 400);
+});
+test('创建房间拒绝已知余量不足 30 分钟的服务商，未知余量及 30 分钟允许', async t => {
+  const status = { agora:{ status:'ok', remaining:29.99 }, zego:{ status:'unavailable' }, volc:{ status:'unavailable' } };
+  const env = { ...credentials, ZEGO_APP_ID:'123456', ZEGO_SERVER_SECRET:'s'.repeat(32) };
+  const { owner } = await server(t, env, { usageService:async () => status });
+  const blocked = await owner('/api/rooms', { name:'低余量', provider:'agora' });
+  assert.equal(blocked.status, 403); assert.match(blocked.data.error, /不足 30 分钟/);
+  assert.equal((await owner('/api/rooms', { name:'未知余量', provider:'zego' })).status, 201);
+  status.agora.remaining = 30;
+  const boundary = await server(t, env, { usageService:async () => status });
+  assert.equal((await boundary.owner('/api/rooms', { name:'边界余量', provider:'agora' })).status, 201);
+});
+test('即构房间固定服务商并签发限房间和推流的 Token', async t => {
+  const secret = 's'.repeat(32), env = { ...credentials, ZEGO_APP_ID: '2102769203', ZEGO_SERVER_SECRET: secret };
+  const { owner, guest } = await server(t, env);
+  const created = await owner('/api/rooms', { name: '即构房间', provider: 'zego' });
+  assert.equal(created.status, 201);
+  assert.equal(created.data.provider, 'zego');
+  assert.equal((await guest(`/api/rooms/${created.data.id}`)).data.provider, 'zego');
+  const response = await guest(`/api/rooms/${created.data.id}/token`, {});
+  assert.equal(response.data.provider, 'zego');
+  assert.equal(response.data.appId, 2102769203);
+  const packed = Buffer.from(response.data.token.slice(2), 'base64');
+  let offset = 8; const ivLength = packed.readUInt16BE(offset); offset += 2;
+  const iv = packed.subarray(offset, offset += ivLength);
+  const encryptedLength = packed.readUInt16BE(offset); offset += 2;
+  const encrypted = packed.subarray(offset, offset += encryptedLength);
+  assert.equal(packed[offset], 1);
+  const decipher = createDecipheriv('aes-256-gcm', Buffer.from(secret), iv);
+  decipher.setAuthTag(encrypted.subarray(-16));
+  const contents = JSON.parse(Buffer.concat([decipher.update(encrypted.subarray(0, -16)), decipher.final()]).toString());
+  const payload = JSON.parse(contents.payload);
+  assert.equal(payload.room_id, created.data.id);
+  assert.deepEqual(payload.stream_id_list, [`${created.data.id}_${response.data.uid}`]);
+  assert.equal(contents.user_id, String(response.data.uid));
+});
+test('火山房间令牌绑定房间与用户并包含发布和订阅权限', async t => {
+  const env = { ...credentials, VOLC_RTC_APP_ID: 'a'.repeat(24), VOLC_RTC_APP_KEY: 'secret' };
+  const { owner, guest } = await server(t, env);
+  const created = await owner('/api/rooms', { name:'火山房间', provider:'volc' });
+  assert.equal(created.data.provider, 'volc');
+  const response = await guest(`/api/rooms/${created.data.id}/token`, {});
+  assert.equal(response.data.provider, 'volc');
+  const token = response.data.token; assert.equal(token.slice(0,27), `001${env.VOLC_RTC_APP_ID}`);
+  const packed = Buffer.from(token.slice(27), 'base64');
+  const msgLen = packed.readUInt16LE(0); const msg = packed.subarray(2, 2 + msgLen);
+  const sigLen = packed.readUInt16LE(2 + msgLen); const signature = packed.subarray(4 + msgLen, 4 + msgLen + sigLen);
+  assert.deepEqual(signature, createHmac('sha256', env.VOLC_RTC_APP_KEY).update(msg).digest());
+  let pos = 12; const take = () => { const n = msg.readUInt16LE(pos); pos += 2; const s = msg.subarray(pos, pos + n).toString(); pos += n; return s; };
+  assert.equal(take(), created.data.id); assert.equal(take(), String(response.data.uid));
+  const count = msg.readUInt16LE(pos); pos += 2; const rights = [];
+  for (let i = 0; i < count; i++) { rights.push(msg.readUInt16LE(pos)); pos += 6; }
+  assert.deepEqual(rights, [0, 1, 2, 3, 4]);
 });
 test('username is required before browsing the public room lobby', async t => {
   const { browser } = await server(t);
@@ -83,7 +147,7 @@ test('all named users see the same room lobby without exposing creator credentia
   assert.equal((await guest(`/api/rooms/${room.id}`)).data.isOwner, false);
   assert.equal((await guest('/api/rooms')).data.rooms[0].name, room.name);
   assert.equal((await stranger('/api/rooms')).data.rooms.length, 1);
-  assert.equal((await owner('/api/rooms', { name: '  ' })).status, 400);
+  assert.equal((await owner('/api/rooms', { name: '  ' })).data.name, '房主');
 });
 test('multiple members receive unique publisher UIDs and session renewal is identity-bound', async t => {
   const { owner, guest } = await server(t);

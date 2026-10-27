@@ -17,18 +17,33 @@ export class RoomStore {
       );
       CREATE INDEX IF NOT EXISTS memberships_user ON memberships(userId);
       CREATE TABLE IF NOT EXISTS visitors (id TEXT PRIMARY KEY, name TEXT NOT NULL, updatedAt INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS rtc_quota (
+        provider TEXT NOT NULL, month TEXT NOT NULL, estimated REAL NOT NULL DEFAULT 0,
+        anchor_remaining REAL, anchor_estimated REAL, PRIMARY KEY (provider, month)
+      );
+      CREATE TABLE IF NOT EXISTS rtc_room_usage (
+        provider TEXT NOT NULL, month TEXT NOT NULL, roomId TEXT NOT NULL,
+        estimated REAL NOT NULL DEFAULT 0, PRIMARY KEY (provider, month, roomId)
+      );
+      CREATE TABLE IF NOT EXISTS zego_tier_duration (
+        month TEXT NOT NULL, rate REAL NOT NULL, milliseconds INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (month, rate)
+      );
     `);
     const columns = this.db.prepare('PRAGMA table_info(rooms)').all().map(c => c.name);
     if (!columns.includes('emptySince')) this.db.exec('ALTER TABLE rooms ADD COLUMN emptySince INTEGER');
     if (!columns.includes('lastActiveAt')) this.db.exec('ALTER TABLE rooms ADD COLUMN lastActiveAt INTEGER');
+    if (!columns.includes('provider')) this.db.exec("ALTER TABLE rooms ADD COLUMN provider TEXT NOT NULL DEFAULT 'agora'");
+    if (!columns.includes('closeReason')) this.db.exec('ALTER TABLE rooms ADD COLUMN closeReason TEXT');
     this.db.exec('UPDATE rooms SET emptySince = updatedAt, lastActiveAt = updatedAt WHERE lastActiveAt IS NULL');
   }
   create(room) {
-    this.db.prepare('INSERT INTO rooms (id,ownerId,name,description,inviteKey,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)')
-      .run(room.id, room.ownerId, room.name, room.description, room.inviteKey, room.createdAt, room.updatedAt);
+    this.db.prepare('INSERT INTO rooms (id,ownerId,name,description,inviteKey,createdAt,updatedAt,provider) VALUES (?,?,?,?,?,?,?,?)')
+      .run(room.id, room.ownerId, room.name, room.description, room.inviteKey, room.createdAt, room.updatedAt, room.provider || 'agora');
     this.db.prepare('UPDATE rooms SET emptySince = ?, lastActiveAt = ? WHERE id = ?').run(room.createdAt, room.createdAt, room.id);
   }
   get(id) { return this.db.prepare('SELECT * FROM rooms WHERE id = ? AND archived = 0').get(id); }
+  getAny(id) { return this.db.prepare('SELECT * FROM rooms WHERE id = ?').get(id); }
   all() { return this.db.prepare('SELECT * FROM rooms WHERE archived = 0 ORDER BY createdAt DESC, id').all(); }
   profile(id) { return this.db.prepare('SELECT name FROM visitors WHERE id = ?').get(id); }
   setProfile(id, name) { this.db.prepare('INSERT INTO visitors VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, updatedAt=excluded.updatedAt').run(id, name, Date.now()); }
@@ -47,6 +62,29 @@ export class RoomStore {
   save(roomId, userId) { this.db.prepare('INSERT OR IGNORE INTO memberships VALUES (?,?,?)').run(roomId, userId, Date.now()); }
   remove(roomId, userId) { this.db.prepare('DELETE FROM memberships WHERE roomId = ? AND userId = ?').run(roomId, userId); }
   update(id, name, description) { this.db.prepare('UPDATE rooms SET name = ?, description = ?, updatedAt = ? WHERE id = ?').run(name, description, Date.now(), id); }
-  archive(id) { this.db.prepare('UPDATE rooms SET archived = 1, updatedAt = ? WHERE id = ?').run(Date.now(), id); }
+  archive(id, reason = null) { this.db.prepare('UPDATE rooms SET archived = 1, updatedAt = ?, closeReason = ? WHERE id = ?').run(Date.now(), reason, id); }
+  quota(provider, month) {
+    this.db.prepare('INSERT OR IGNORE INTO rtc_quota(provider,month) VALUES (?,?)').run(provider, month);
+    return this.db.prepare('SELECT * FROM rtc_quota WHERE provider=? AND month=?').get(provider, month);
+  }
+  addUsage(provider, month, roomId, amount) {
+    this.db.prepare('INSERT INTO rtc_quota(provider,month,estimated) VALUES (?,?,?) ON CONFLICT(provider,month) DO UPDATE SET estimated=estimated+excluded.estimated').run(provider, month, amount);
+    this.db.prepare('INSERT INTO rtc_room_usage VALUES (?,?,?,?) ON CONFLICT(provider,month,roomId) DO UPDATE SET estimated=estimated+excluded.estimated').run(provider, month, roomId, amount);
+  }
+  addZegoDuration(month, roomId, rate, milliseconds) {
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('INSERT INTO zego_tier_duration VALUES (?,?,?) ON CONFLICT(month,rate) DO UPDATE SET milliseconds=milliseconds+excluded.milliseconds').run(month, rate, milliseconds);
+      this.addUsage('zego', month, roomId, milliseconds / 60000 * rate);
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  zegoRoundingReserve(month) {
+    const tiers = this.db.prepare('SELECT rate, milliseconds FROM zego_tier_duration WHERE month=?').all(month);
+    return tiers.reduce((total, tier) => total + (Math.ceil(tier.milliseconds / 60000) - tier.milliseconds / 60000) * tier.rate, 0);
+  }
+  setQuotaAnchor(provider, month, remaining, estimated) {
+    this.db.prepare('UPDATE rtc_quota SET anchor_remaining=?,anchor_estimated=? WHERE provider=? AND month=? AND anchor_remaining IS NULL').run(remaining, estimated, provider, month);
+  }
   close() { this.db.close(); }
 }

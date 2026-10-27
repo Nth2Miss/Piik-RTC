@@ -1,9 +1,10 @@
 /* Agora room extensions. Piik's unmodified production CSS is imported first. */
 #app { min-height:100svh; }
-.sw-rtc-badge { display:inline-flex; flex:none; align-items:center; min-height:24px; color:var(--muted); font:11px var(--mono); text-decoration:none; }
-.sw-rtc-badge img { display:block; height:20px; max-width:180px; }
-.sw-rtc-badge:hover { opacity:.8; }
-.sw-help-badge { display:flex; align-items:center; gap:12px; margin-top:20px; padding-top:16px; border-top:1px solid var(--wall-2); }
+.sw-header-provider { display:inline-flex; align-items:center; gap:7px; padding:8px 12px; border-radius:999px; background:var(--wall-2); color:var(--muted); font-size:11.5px; font-weight:700; white-space:nowrap; }
+.sw-header-provider[data-state="live"] i { background:var(--live); }
+.sw-header-provider[data-state="busy"] i:nth-child(-n+2) { background:var(--warn); animation:lr-led-chase 1s ease-in-out infinite; }
+.sw-header-provider[data-state="busy"] i:nth-child(2) { animation-delay:.15s; }
+.sw-header-provider[data-state="warn"] i:nth-child(-n+2) { background:var(--warn); animation:lr-led-beat 1.1s ease-in-out infinite; }
 .sw-header-name { border:0; padding:0; background:none; }
 .sw-name-entry { width:min(460px,100%); padding:28px; gap:16px; justify-items:center; text-align:center; }
 .sw-name-entry h2 { font-size:21px; }
@@ -97,6 +98,15 @@
 .sw-help { display:grid; gap:18px; font-size:13px; line-height:1.8; }
 .sw-help>svg { justify-self:center; }
 .sw-help a { color:var(--action-text); }
+.sw-help-usage { display:grid; gap:12px; padding:16px; border:1px solid var(--line); border-radius:16px; background:var(--wall); }
+.sw-help-usage>header,.sw-help-usage-title { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+.sw-help-usage>header .lr-btn { min-width:28px; padding:0; }
+.sw-help-usage-list { display:grid; gap:14px; }
+.sw-help-usage-item { display:grid; gap:6px; }
+.sw-help-usage-title { font-size:12px; }
+.sw-help-usage-title>span,.sw-help-usage-item p { color:var(--muted); font-size:11px; text-align:right; }
+.sw-help-usage-title small { margin-left:6px; color:var(--action-text); font-size:10px; }
+.sw-help-usage-item p { text-align:left; }
 .sw-members { display:grid; gap:5px; }
 .sw-members .lr-viewer-overview-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px; border-radius:12px; }
 .sw-notice { position:fixed; z-index:50; bottom:18px; left:50%; transform:translateX(-50%); width:max-content; max-width:min(700px,calc(100vw - 24px)); box-shadow:var(--panel-shadow); }
@@ -149,3 +159,30 @@
   .sw-dialog { padding:18px; }
   .sw-name-entry { padding:22px; }
 }
+.sw-status-link {
+  text-decoration: none;
+}
+.sw-usage-card { display:flex; flex-direction:column; gap:12px; }
+.sw-usage-card h3 { margin-bottom:0; }
+.sw-usage-details { display:grid; gap:14px; }
+.sw-usage-details section { display:grid; gap:7px; }
+.sw-usage-details section+section { padding-top:12px; border-top:1px solid var(--line); }
+.sw-usage-details h4 { font-size:12px; color:var(--muted); }
+.sw-usage-details dl { display:grid; grid-template-columns:auto 1fr; gap:5px 12px; font-size:12px; }
+.sw-usage-details dt { color:var(--muted); }
+.sw-usage-details dd { text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.sw-help-usage-item+.sw-help-usage-item { padding-top:14px; border-top:1px solid var(--line); }
+.sw-usage-progress { height:10px; overflow:hidden; border-radius:999px; background:var(--line); }
+.sw-usage-progress span { display:block; height:100%; border-radius:inherit; background:var(--live, #3a9d78); transition:width .2s ease, background-color .2s ease; }
+.sw-usage-progress.is-medium span { background:var(--warn, #e39518); }
+.sw-usage-progress.is-low span { background:var(--danger, #ce574d); }
+.sw-usage-progress.is-empty { opacity:.45; }
+.sw-usage-warning { color:var(--bad, #ce574d); font-size:12px; }
+.sw-provider-list { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+.sw-provider-list legend { font-weight: 700; margin-bottom: 8px; }
+.sw-provider-list label { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; }
+.sw-provider-content { display:grid; flex:1; min-width:0; gap:7px; }
+.sw-provider-heading { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:4px 10px; }
+.sw-provider-heading small { text-align:right; }
+.sw-provider-content .sw-usage-progress,.sw-help-usage .sw-usage-progress { height:7px; }
+.sw-provider-list label:has(input:disabled) { opacity:.55; }

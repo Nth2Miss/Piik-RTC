@@ -31,6 +31,7 @@ export async function captureScreen(
   sdk: Pick<IAgoraRTC, 'createCustomVideoTrack' | 'createCustomAudioTrack'>,
   acquire: (options: ReturnType<typeof displayOptions>) => Promise<MediaStream> = options => navigator.mediaDevices.getDisplayMedia(options as DisplayMediaStreamOptions),
   windowAudioSupported = knownWindowAudioSupport(typeof navigator === 'undefined' ? '' : navigator.userAgent),
+  max1080 = false,
 ): Promise<CapturedScreen> {
   // Call immediately from the share button, before any await that could lose activation.
   const stream = await acquire(displayOptions(p));
@@ -38,6 +39,12 @@ export async function captureScreen(
   try {
     const rawVideo = stream.getVideoTracks()[0];
     if (!rawVideo) throw new Error('浏览器没有返回共享画面，请重新选择。');
+    if (max1080) {
+      try { await rawVideo.applyConstraints({ width:{ max:1920 }, height:{ max:1080 } }); }
+      catch { throw new Error('无法将即构共享画面限制在 1080P，请更换浏览器或共享来源。'); }
+      const { width, height } = rawVideo.getSettings();
+      if (!width || !height || width > 1920 || height > 1080) throw new Error('无法确认即构共享画面不超过 1080P，请更换浏览器或共享来源。');
+    }
     const surface = rawVideo.getSettings().displaySurface || 'unknown';
     const config = encoderConfig(p);
     const video = sdk.createCustomVideoTrack({ mediaStreamTrack: rawVideo, ...config, optimizationMode: p.optimization });

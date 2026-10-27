@@ -1,4 +1,4 @@
-// Keep this in sync with server/username.js.
+// Keep this in sync with server/rooms/username.js.
 const weakNames = new Set([
   'admin', 'root', 'test', 'guest', 'user', 'password',
   'qwerty', 'asdf', 'zxcv', 'qazwsx', 'abc', 'abcd', 'abcde',

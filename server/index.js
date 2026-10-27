@@ -1,12 +1,12 @@
 import 'dotenv/config';
 import { createApp } from './app.js';
-import { attachRealtime } from './realtime.js';
+import { attachRealtime } from './rooms/realtime.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import express from 'express';
 import { mkdirSync } from 'node:fs';
-import { RoomStore } from './room-store.js';
+import { RoomStore } from './rooms/store.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDirectory = path.join(root, 'data');
 mkdirSync(dataDirectory, { recursive: true });

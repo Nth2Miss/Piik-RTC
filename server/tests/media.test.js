@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SourceController } from '../src/source-controller.ts';
-import { normalizePreferences, captureConfig, defaults, presets } from '../src/preferences.ts';
+import { SourceController } from '../../src/source-controller.ts';
+import { normalizePreferences, captureConfig, defaults, presets } from '../../src/preferences.ts';
 
 function track(id, log) {
   return { play: () => log.push(`play:${id}`), stop: () => log.push(`stop:${id}`), close: () => log.push(`close:${id}`), setVolume: v => log.push(`volume:${id}:${v}`) };

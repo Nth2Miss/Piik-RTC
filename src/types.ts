@@ -1,5 +1,6 @@
 export interface Room {
   id: string;
+  provider?: 'agora' | 'zego' | 'volc';
   name: string;
   description: string;
   inviteKey: string;
