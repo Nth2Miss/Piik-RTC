@@ -9,6 +9,18 @@
   var rawVideoFrames = new Set();
   var videoEnded = new Set();
 
+  // The WinForms context menu lives outside WebView2, so the page has to tell
+  // the host when the user clicks, scrolls, or presses Escape elsewhere.
+  document.addEventListener('pointerdown', function (event) {
+    if (event.button !== 2) webview.postMessage({ type: 'ui-dismiss' });
+  }, true);
+  document.addEventListener('wheel', function () {
+    webview.postMessage({ type: 'ui-dismiss' });
+  }, { capture: true, passive: true });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') webview.postMessage({ type: 'ui-dismiss' });
+  }, true);
+
   function bytesFromBase64(value) {
     var binary = atob(value || '');
     var bytes = new Uint8Array(binary.length);

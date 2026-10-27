@@ -14,7 +14,7 @@
    - 生产环境必须使用 `https://`。
    - 本机调试可以使用 `http://localhost:3000`。
    - 如果构建时内嵌了服务端地址，首次启动会直接连接，不再显示这一步。
-3. 地址保存在 `%LOCALAPPDATA%\PiikDesktop\config.json`；菜单“文件 → 服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。优先级：启动参数 > 环境变量 > 已保存配置 > 构建时内嵌地址。
+3. 地址保存在 `%LOCALAPPDATA%\PiikDesktop\config.json`；在窗口内右键打开菜单，选择“服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。优先级：启动参数 > 环境变量 > 已保存配置 > 构建时内嵌地址。
 
 桌面端加载服务器上的网页前端，所以服务端更新后界面也会更新；只有桌面壳或原生采集改动才需要重新发布客户端。
 
@@ -73,7 +73,9 @@ npm run desktop:build -- --server=https://piik.example.com
 npm run desktop:build:embed -- --server=https://piik.example.com
 ```
 
-内嵌地址会写入 exe，首次启动直接连接该服务器，不需要用户填写。用户仍可以通过“文件 → 服务器设置…”修改；`--server` 启动参数和 `PIIK_SERVER_URL` 环境变量也会覆盖它。`desktop:build:embed` 必须通过 `--server` 或 `PIIK_DEFAULT_SERVER_URL` 指定地址；构建脚本也接受环境变量 `PIIK_DEFAULT_SERVER_URL`，便于 CI 使用。
+内嵌地址会写入 exe，首次启动直接连接该服务器，不需要用户填写。用户仍可以在窗口内右键打开菜单，选择“服务器设置…”修改；`--server` 启动参数和 `PIIK_SERVER_URL` 环境变量也会覆盖它。`desktop:build:embed` 必须通过 `--server` 或 `PIIK_DEFAULT_SERVER_URL` 指定地址；构建脚本也接受环境变量 `PIIK_DEFAULT_SERVER_URL`，便于 CI 使用。
+
+版本号取自 `package.json`，构建时写入桌面程序集，并显示在网页帮助页和桌面服务器设置页。发布前先提升版本（例如 `npm version patch --no-git-tag-version`），再推送匹配的 `v<version>` tag；`.github/workflows/desktop.yml` 会构建 exe、上传 artifact 并发布到 GitHub Release。
 
 构建流程：
 

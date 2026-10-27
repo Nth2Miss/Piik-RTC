@@ -103,6 +103,7 @@
 .sw-help-brand-line strong { font-size:15px; letter-spacing:.02em; }
 .sw-help a.sw-help-github { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border:1px solid var(--line); border-radius:999px; color:var(--muted); text-decoration:none; }
 .sw-help a.sw-help-github:hover { color:var(--ink); border-color:var(--control-edge); background:var(--wall); }
+.sw-help-version { margin:0; color:var(--muted); font-size:11px; letter-spacing:.02em; }
 .sw-help a { color:var(--action-text); }
 .sw-members { display:grid; gap:5px; }
 .sw-members .lr-viewer-overview-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px; border-radius:12px; }

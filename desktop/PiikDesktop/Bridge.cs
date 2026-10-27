@@ -76,6 +76,7 @@ namespace PiikDesktop
 
             var id = GetInt(request, "id");
             var type = GetString(request, "type");
+            if (type == "ui-dismiss") return;
             var payload = request.TryGetValue("payload", out var payloadValue) ? payloadValue as Dictionary<string, object> : null;
             if (payload == null) payload = new Dictionary<string, object>();
 

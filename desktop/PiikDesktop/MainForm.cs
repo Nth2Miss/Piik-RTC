@@ -16,14 +16,11 @@ namespace PiikDesktop
         private readonly string _browserArguments;
         private WebView2 _webView;
         private Bridge _bridge;
-        private MenuStrip _menu;
-        private ToolStripMenuItem _reloadItem;
-        private ToolStripMenuItem _devToolsItem;
+        private ContextMenuStrip _contextMenu;
         private string _serverOrigin = "";
         private bool _showingSetup;
         private FormWindowState _stateBeforeFullscreen = FormWindowState.Normal;
         private FormBorderStyle _borderBeforeFullscreen = FormBorderStyle.Sizable;
-        private bool _menuVisibleBeforeFullscreen = true;
 
         public AppConfig Config { get { return _config; } }
         public string ServerUrl { get { return _config.ServerUrl; } }
@@ -49,7 +46,7 @@ namespace PiikDesktop
             }
             catch { /* icon is optional */ }
 
-            BuildMenu();
+            BuildContextMenu();
             _webView = new WebView2
             {
                 Dock = DockStyle.Fill,
@@ -98,24 +95,20 @@ namespace PiikDesktop
             return false;
         }
 
-        private void BuildMenu()
+        private void BuildContextMenu()
         {
-            _menu = new MenuStrip { Dock = DockStyle.Top };
-            var file = new ToolStripMenuItem("文件");
-            file.DropDownItems.Add(new ToolStripMenuItem("服务器设置…", null, (_, __) => ShowSetup("")) { ShortcutKeys = Keys.Control | Keys.Shift | Keys.U });
-            file.DropDownItems.Add(new ToolStripSeparator());
-            file.DropDownItems.Add(new ToolStripMenuItem("退出", null, (_, __) => Close()));
-
-            var view = new ToolStripMenuItem("查看");
-            _reloadItem = new ToolStripMenuItem("重新加载", null, (_, __) => { if (_webView.CoreWebView2 != null) _webView.CoreWebView2.Reload(); }) { ShortcutKeys = Keys.Control | Keys.R };
-            _devToolsItem = new ToolStripMenuItem("开发者工具", null, (_, __) => { if (_webView.CoreWebView2 != null) _webView.CoreWebView2.OpenDevToolsWindow(); }) { ShortcutKeys = Keys.F12 };
-            view.DropDownItems.Add(_reloadItem);
-            view.DropDownItems.Add(_devToolsItem);
-
-            _menu.Items.Add(file);
-            _menu.Items.Add(view);
-            MainMenuStrip = _menu;
-            Controls.Add(_menu);
+            _contextMenu = new ContextMenuStrip();
+            _contextMenu.Items.Add(new ToolStripMenuItem("服务器设置…", null, (_, __) => ShowSetup("")));
+            _contextMenu.Items.Add(new ToolStripMenuItem("重新加载", null, (_, __) =>
+            {
+                if (_webView?.CoreWebView2 != null) _webView.CoreWebView2.Reload();
+            }));
+            _contextMenu.Items.Add(new ToolStripMenuItem("开发者工具", null, (_, __) =>
+            {
+                if (_webView?.CoreWebView2 != null) _webView.CoreWebView2.OpenDevToolsWindow();
+            }));
+            _contextMenu.Items.Add(new ToolStripSeparator());
+            _contextMenu.Items.Add(new ToolStripMenuItem("退出", null, (_, __) => Close()));
         }
 
         private async System.Threading.Tasks.Task InitializeAsync()
@@ -129,7 +122,7 @@ namespace PiikDesktop
                 await _webView.EnsureCoreWebView2Async(environment);
                 var core = _webView.CoreWebView2;
                 core.Settings.AreDevToolsEnabled = true;
-                core.Settings.AreDefaultContextMenusEnabled = false;
+                core.Settings.AreDefaultContextMenusEnabled = true;
                 core.Settings.IsStatusBarEnabled = false;
                 core.Settings.AreBrowserAcceleratorKeysEnabled = true;
                 core.Settings.IsSwipeNavigationEnabled = false;
@@ -140,7 +133,26 @@ namespace PiikDesktop
                 if (!string.IsNullOrEmpty(shim)) await core.AddScriptToExecuteOnDocumentCreatedAsync(shim);
 
                 _bridge = new Bridge(this, core);
+                core.WebMessageReceived += (_, eventArgs) =>
+                {
+                    var source = eventArgs.Source ?? "";
+                    if (!IsTrusted(source) && !IsSetupAddress(source)) return;
+                    try
+                    {
+                        var request = SimpleJson.ParseObject(eventArgs.WebMessageAsJson);
+                        if (string.Equals(Bridge.GetString(request, "type"), "ui-dismiss", StringComparison.Ordinal))
+                        {
+                            _contextMenu?.Close();
+                        }
+                    }
+                    catch { /* malformed messages are handled by the bridge */ }
+                };
                 core.WebMessageReceived += _bridge.HandleMessage;
+                core.ContextMenuRequested += (_, eventArgs) =>
+                {
+                    eventArgs.Handled = true;
+                    _contextMenu?.Show(_webView, eventArgs.Location);
+                };
                 core.NavigationStarting += (_, eventArgs) => NavigationStarting(eventArgs);
                 core.NavigationCompleted += (_, eventArgs) => NavigationCompleted(eventArgs);
                 core.NewWindowRequested += (_, eventArgs) =>
@@ -277,15 +289,12 @@ namespace PiikDesktop
             {
                 _stateBeforeFullscreen = WindowState;
                 _borderBeforeFullscreen = FormBorderStyle;
-                _menuVisibleBeforeFullscreen = _menu.Visible;
-                _menu.Visible = false;
                 FormBorderStyle = FormBorderStyle.None;
                 WindowState = FormWindowState.Normal;
                 WindowState = FormWindowState.Maximized;
             }
             else
             {
-                _menu.Visible = _menuVisibleBeforeFullscreen;
                 FormBorderStyle = _borderBeforeFullscreen;
                 WindowState = _stateBeforeFullscreen;
             }

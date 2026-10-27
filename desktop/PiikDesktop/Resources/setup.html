@@ -178,7 +178,7 @@
     <section class="panel">
       <div class="panel-heading">
         <h2>连接你的小客厅</h2>
-        <p>桌面端需要连接一个已部署的 Piik-RTC 服务。程序、窗口和声音采集都在本机完成。</p>
+        <p>需要连接一个已部署的 Piik-RTC 服务。</p>
       </div>
       <form id="form">
         <label class="field-label" for="server">服务器地址</label>
@@ -186,7 +186,8 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           <input id="server" name="server" type="url" placeholder="https://piik.example.com" autocomplete="url" spellcheck="false" required/>
         </label>
-        <p class="hint">支持 <code>https://</code> 地址；本机调试可以使用 <code>http://localhost:3000</code>。邀请链接和房间数据来自同一台服务器。</p>
+        <p class="hint">邀请链接和房间数据来自同一台服务器。</p>
+        <p class="hint">在窗口内右键打开菜单。</p>
         <div class="actions">
           <button class="btn primary" id="connect" type="submit">
             <span>连接</span>

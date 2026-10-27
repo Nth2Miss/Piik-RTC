@@ -4,6 +4,7 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
+const packageVersion = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const helperProject = path.join(root, 'desktop', 'native', 'PiikAudio', 'PiikAudio.csproj');
 const helperOutput = path.join(root, 'desktop', 'bin');
 const helperExe = path.join(helperOutput, 'PiikAudio.exe');
@@ -88,12 +89,14 @@ writeFileSync(resource, compressed);
 console.log(`音频组件：${(raw.length / 1024 / 1024).toFixed(1)} MB -> 压缩 ${(compressed.length / 1024 / 1024).toFixed(1)} MB`);
 
 run('dotnet', ['build', hostProject, '-c', 'Release', '-v', 'minimal',
+  ...(packageVersion ? ['-p:Version=' + packageVersion] : []),
   ...(embeddedServer ? ['-p:PiikDefaultServerUrl=' + embeddedServer] : [])]);
 if (!existsSync(hostExe)) {
   console.error('桌面端没有生成：' + hostExe);
   process.exit(1);
 }
 
+console.log(`桌面端版本：${packageVersion || '未知'}`);
 if (embeddedServer) console.log(`内嵌服务端：${embeddedServer}`);
 
 mkdirSync(release, { recursive: true });

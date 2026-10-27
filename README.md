@@ -57,7 +57,9 @@ npm run desktop:build -- --server=https://piik.example.com   # 内嵌默认服�
 
 需要 Node.js 24+ 和 .NET 9 SDK（构建时发布内置音频组件）。运行需要系统 WebView2 运行时，Windows 11 和带 Edge 的 Windows 10 通常已自带。
 
-首次启动填写服务器地址；生产环境使用 HTTPS，本机调试可用 `http://localhost:3000`。构建时传入 `--server` 可以内嵌默认服务器，首次启动直接连接；用户仍可在“文件 → 服务器设置…”中修改。程序声音和语音过滤需要 Windows 10 2004（19041）及以上。单文件约 6.4 MB，架构、限制和排障见 [docs/desktop.md](docs/desktop.md)。
+首次启动填写服务器地址；生产环境使用 HTTPS，本机调试可用 `http://localhost:3000`。构建时传入 `--server` 可以内嵌默认服务器，首次启动直接连接；用户仍可在窗口内右键打开菜单，选择“服务器设置…”修改。程序声音和语音过滤需要 Windows 10 2004（19041）及以上。单文件约 6.4 MB，架构、限制和排障见 [docs/desktop.md](docs/desktop.md)。
+
+版本号来自 `package.json`，显示在网页右上角问号的帮助页和桌面服务器设置页。发版前请提升版本（例如 `npm version patch --no-git-tag-version`），再推送 `v<版本>` tag；`Desktop` workflow 会构建 `Piik.exe` 并发布到 GitHub Release。
 
 桌面端加载服务器上的网页前端，更新服务端网页资源后无需重新发布客户端。桌面端同样支持声网、即构和火山引擎房间；即构共享画面最高为 1080P、码率最高为 10 Mbps，选择 1440P/原画或 12/16 Mbps 时会自动按 1080P / 10 Mbps 采集。
 
