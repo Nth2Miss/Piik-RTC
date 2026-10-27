@@ -1,7 +1,7 @@
 import type { IAgoraRTC, ILocalAudioTrack, ILocalVideoTrack } from 'agora-rtc-sdk-ng';
 import type { CapturedScreen } from '../capture.ts';
 import { encoderConfig, type Preferences } from '../preferences.ts';
-import { desktopBridge, type CaptureSelection, type DesktopBridge, type DesktopVideoFrame } from './bridge.ts';
+import { desktopBridge, type CaptureSelection, type DesktopBridge, type DesktopVideoFrame, type DesktopVideoStartResult } from './bridge.ts';
 import { startProcessAudio, type ProcessAudio } from './audio.ts';
 
 interface NativeVideo {
@@ -27,43 +27,37 @@ function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
 async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelection, preferences: Preferences): Promise<NativeVideo> {
   const native = preferences.resolution === 'native';
   const target = encoderConfig(preferences);
-  let frameSink: ((frame: DesktopVideoFrame) => void) | null = null;
-  let pendingFrame: DesktopVideoFrame | null = null;
   let ended = false;
   let endedHandler: (() => void) | null = null;
-  let stopped = false;
-
-  const offFrame = bridge.onVideoFrame(frame => {
-    if (frameSink) frameSink(frame);
-    else if (!pendingFrame) pendingFrame = frame;
-  });
   const offEnded = bridge.onVideoEnded(() => {
     ended = true;
     endedHandler?.();
   });
 
-  let started;
+  let started: DesktopVideoStartResult;
   try {
+    const rawSupported = typeof VideoFrame === 'function';
     started = await bridge.startVideo({
       sourceId: selection.sourceId,
       width: native ? 0 : Number(target.width),
       height: native ? 0 : Number(target.height),
       fps: preferences.fps,
       native,
+      raw: rawSupported,
     });
   } catch (error) {
-    offFrame();
     offEnded();
     throw error;
   }
   if (!started.ok || !started.width || !started.height) {
-    offFrame();
     offEnded();
     throw new Error(started.message || '无法开始画面采集。');
   }
 
   const width = Number(started.width);
   const height = Number(started.height);
+  const raw = started.mode === 'raw' && typeof VideoFrame === 'function';
+
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -71,7 +65,6 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
   document.body.appendChild(canvas);
   const context = canvas.getContext('2d', { alpha: false, desynchronized: true });
   if (!context) {
-    offFrame();
     offEnded();
     canvas.remove();
     void bridge.stopVideo().catch(() => {});
@@ -89,9 +82,48 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
   }
   const requestFrame = typeof track.requestFrame === 'function' ? () => track.requestFrame() : () => {};
 
+  let stopped = false;
+  let frameSink: ((frame: DesktopVideoFrame) => void) | null = null;
+  let pendingFrame: DesktopVideoFrame | null = null;
+  let writingRaw = false;
+  let latestRaw: VideoFrame | null = null;
+
+  // WGC frames arrive as BGRA VideoFrames. Drawing them straight onto the
+  // canvas avoids the JPEG encode/decode round trip while keeping a canvas
+  // track, which is supported by every RTC SDK.
+  const drawRaw = (frame: VideoFrame) => {
+    if (stopped) { frame.close(); return; }
+    if (writingRaw) {
+      latestRaw?.close();
+      latestRaw = frame;
+      return;
+    }
+    writingRaw = true;
+    try {
+      context.drawImage(frame, 0, 0, width, height);
+      requestFrame();
+    } catch {
+      /* a bad frame must not stop the share */
+    } finally {
+      frame.close();
+      writingRaw = false;
+    }
+    if (latestRaw) {
+      const next = latestRaw;
+      latestRaw = null;
+      drawRaw(next);
+    }
+  };
+
+  const offRaw = raw ? bridge.onVideoFrameRaw(({ frame }) => drawRaw(frame)) : undefined;
+  const offFrame = raw ? undefined : bridge.onVideoFrame(frame => {
+    if (frameSink) frameSink(frame);
+    else if (!pendingFrame) pendingFrame = frame;
+  });
+
   let decoding = false;
   let latest: DesktopVideoFrame | null = null;
-  const draw = async (frame: DesktopVideoFrame) => {
+  const drawJpeg = async (frame: DesktopVideoFrame) => {
     if (stopped) return;
     if (decoding) { latest = frame; return; }
     decoding = true;
@@ -109,27 +141,33 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
     if (latest) {
       const next = latest;
       latest = null;
-      void draw(next);
+      void drawJpeg(next);
     }
   };
 
   const stop = async () => {
     if (stopped) return;
     stopped = true;
-    offFrame();
+    offRaw?.();
+    offFrame?.();
     offEnded();
     latest = null;
+    latestRaw?.close();
+    latestRaw = null;
     frameSink = null;
+    pendingFrame = null;
     try { await bridge.stopVideo(); } catch { /* host may already be stopped */ }
     try { track.stop(); } catch { /* already stopped */ }
     canvas.remove();
   };
 
-  frameSink = frame => { void draw(frame); };
-  if (pendingFrame) {
-    const first = pendingFrame;
-    pendingFrame = null;
-    void draw(first);
+  if (!raw) {
+    frameSink = frame => { void drawJpeg(frame); };
+    if (pendingFrame) {
+      const first = pendingFrame;
+      pendingFrame = null;
+      void drawJpeg(first);
+    }
   }
 
   return {
@@ -143,7 +181,6 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
     stop,
   };
 }
-
 /** Pick the audio source that matches the user's choice in the picker. */
 async function startDesktopAudio(
   selection: CaptureSelection,

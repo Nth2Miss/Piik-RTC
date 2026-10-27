@@ -6,6 +6,7 @@
   var audioData = new Set();
   var audioEnded = new Set();
   var videoFrames = new Set();
+  var rawVideoFrames = new Set();
   var videoEnded = new Set();
 
   function bytesFromBase64(value) {
@@ -68,6 +69,32 @@
     }
   });
 
+  webview.addEventListener('sharedbufferreceived', function (event) {
+    var info = event.additionalData || {};
+    var buffer = event.getBuffer ? event.getBuffer() : null;
+    if (!buffer) return;
+    var frame = null;
+    try {
+      if (info.type === 'video-frame-raw'
+        && rawVideoFrames.size > 0
+        && typeof VideoFrame === 'function') {
+        frame = new VideoFrame(buffer, {
+          format: 'BGRA',
+          codedWidth: info.width,
+          codedHeight: info.height,
+          timestamp: info.timestamp,
+          layout: [{ offset: 0, stride: info.stride }],
+        });
+      }
+    } catch (error) {
+      console.error('raw video frame failed', error);
+    } finally {
+      try { webview.releaseBuffer(buffer); } catch (error) { }
+      webview.postMessage({ type: 'video-frame-consumed', bufferId: info.bufferId });
+    }
+    if (frame) emit(rawVideoFrames, { frame: frame, width: info.width, height: info.height, seq: info.seq });
+  });
+
   var api = {
     isDesktop: true,
     captureMode: 'webview2',
@@ -79,6 +106,7 @@
     startVideo: function (options) { return request('startVideo', options); },
     stopVideo: function () { return request('stopVideo'); },
     onVideoFrame: subscribe(videoFrames),
+    onVideoFrameRaw: subscribe(rawVideoFrames),
     onVideoEnded: subscribe(videoEnded),
     startAudio: function (options) { return request('startAudio', options); },
     stopAudio: function () { return request('stopAudio'); },

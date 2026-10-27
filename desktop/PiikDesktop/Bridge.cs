@@ -23,8 +23,14 @@ namespace PiikDesktop
         private SourceListResult _lastList;
         private DesktopSource _selected;
         private bool _setupMode;
-        private VideoCapture _video;
+        private IVideoCapture _video;
+        private string _videoMode;
         private AudioProcessHost _audio;
+        private readonly object _bufferGate = new object();
+        private readonly List<CoreWebView2SharedBuffer> _freeBuffers = new List<CoreWebView2SharedBuffer>();
+        private readonly Dictionary<int, CoreWebView2SharedBuffer> _inFlightBuffers = new Dictionary<int, CoreWebView2SharedBuffer>();
+        private int _nextBufferId;
+        private int _pendingRawFrames;
 
         public Bridge(IBridgeHost host, CoreWebView2 core)
         {
@@ -72,6 +78,13 @@ namespace PiikDesktop
             var type = GetString(request, "type");
             var payload = request.TryGetValue("payload", out var payloadValue) ? payloadValue as Dictionary<string, object> : null;
             if (payload == null) payload = new Dictionary<string, object>();
+
+            if (type == "video-frame-consumed")
+            {
+                if (!IsTrustedSource(source)) return;
+                ReleaseSharedBuffer(GetInt(request, "bufferId"));
+                return;
+            }
 
             if (!Authorize(source, type, out var denial))
             {
@@ -192,34 +205,167 @@ namespace PiikDesktop
             if (fps <= 0) fps = 30;
             if (fps > 60) fps = 60;
             StopVideo();
-            _video = new VideoCapture(_selected, width, height, fps,
-                frame => Post(new Dictionary<string, object>
+
+            var wantRaw = GetBool(payload, "raw")
+                && width > 0 && height > 0
+                && (long)width * height <= 1920L * 1080L
+                && fps <= 30
+                && WgcCapture.IsSupported();
+            if (wantRaw)
+            {
+                var capture = new WgcCapture(_selected, width, height, fps, PostRawFrame, EndVideo);
+                try
                 {
-                    ["type"] = "video-frame",
-                    ["data"] = Convert.ToBase64String(frame.Data),
-                    ["width"] = frame.Width,
-                    ["height"] = frame.Height,
-                    ["seq"] = frame.Sequence,
-                }),
-                info => Post(new Dictionary<string, object>
+                    capture.Start();
+                    _video = capture;
+                    _videoMode = "raw";
+                }
+                catch (Exception exception)
                 {
-                    ["type"] = "video-ended",
-                    ["info"] = new Dictionary<string, object> { ["code"] = info.Code, ["message"] = info.Message },
-                }));
-            _video.Start();
+                    Log.Write("WGC unavailable, falling back to JPEG: " + exception);
+                    try { capture.Stop(); } catch { }
+                }
+            }
+            if (_video == null)
+            {
+                var capture = new VideoCapture(_selected, width, height, fps,
+                    frame => Post(new Dictionary<string, object>
+                    {
+                        ["type"] = "video-frame",
+                        ["data"] = Convert.ToBase64String(frame.Data),
+                        ["width"] = frame.Width,
+                        ["height"] = frame.Height,
+                        ["seq"] = frame.Sequence,
+                    }),
+                    info => Post(new Dictionary<string, object>
+                    {
+                        ["type"] = "video-ended",
+                        ["info"] = new Dictionary<string, object> { ["code"] = info.Code, ["message"] = info.Message },
+                    }));
+                capture.Start();
+                _video = capture;
+                _videoMode = "jpeg";
+            }
+            Log.Write("video start: mode=" + _videoMode + " " + _video.Width + "x" + _video.Height + " fps=" + fps);
             return new Dictionary<string, object>
             {
                 ["ok"] = true,
                 ["width"] = _video.Width,
                 ["height"] = _video.Height,
+                ["mode"] = _videoMode,
             };
+        }
+
+        private void EndVideo(VideoEndedInfo info)
+        {
+            Post(new Dictionary<string, object>
+            {
+                ["type"] = "video-ended",
+                ["info"] = new Dictionary<string, object> { ["code"] = info.Code, ["message"] = info.Message },
+            });
+        }
+
+        private void PostRawFrame(RawVideoFrame frame)
+        {
+            if (frame == null || frame.Data == null) return;
+            if (Interlocked.Increment(ref _pendingRawFrames) > 2)
+            {
+                Interlocked.Decrement(ref _pendingRawFrames);
+                return;
+            }
+            if (_uiContext == null) { ShareRawFrame(frame); Interlocked.Decrement(ref _pendingRawFrames); return; }
+            _uiContext.Post(_ =>
+            {
+                try { ShareRawFrame(frame); }
+                finally { Interlocked.Decrement(ref _pendingRawFrames); }
+            }, null);
+        }
+
+        private void ShareRawFrame(RawVideoFrame frame)
+        {
+            if (_videoMode != "raw" || _video == null) return;
+            CoreWebView2SharedBuffer buffer = null;
+            var bufferId = 0;
+            lock (_bufferGate)
+            {
+                while (_freeBuffers.Count > 0)
+                {
+                    var candidate = _freeBuffers[_freeBuffers.Count - 1];
+                    _freeBuffers.RemoveAt(_freeBuffers.Count - 1);
+                    if (candidate == null) continue;
+                    if (candidate.Size >= (ulong)frame.Data.Length) { buffer = candidate; break; }
+                    try { candidate.Close(); } catch { }
+                }
+                if (buffer == null && _freeBuffers.Count + _inFlightBuffers.Count < 4)
+                {
+                    try { buffer = _core.Environment.CreateSharedBuffer((ulong)frame.Data.Length); }
+                    catch (Exception exception) { Log.Write("shared buffer create failed: " + exception.Message); return; }
+                }
+                // Backpressure: the renderer keeps at most a few buffers in flight.
+                if (buffer == null) return;
+                bufferId = ++_nextBufferId;
+                _inFlightBuffers[bufferId] = buffer;
+            }
+            try
+            {
+                using (var stream = buffer.OpenStream()) stream.Write(frame.Data, 0, frame.Data.Length);
+                var payload = new Dictionary<string, object>
+                {
+                    ["type"] = "video-frame-raw",
+                    ["bufferId"] = bufferId,
+                    ["width"] = frame.Width,
+                    ["height"] = frame.Height,
+                    ["stride"] = frame.Stride,
+                    ["seq"] = frame.Sequence,
+                    ["timestamp"] = frame.TimestampUs,
+                };
+                _core.PostSharedBufferToScript(buffer, CoreWebView2SharedBufferAccess.ReadOnly, SimpleJson.Stringify(payload));
+            }
+            catch (Exception exception)
+            {
+                Log.Write("raw frame post failed: " + exception.Message);
+                lock (_bufferGate)
+                {
+                    _inFlightBuffers.Remove(bufferId);
+                    _freeBuffers.Add(buffer);
+                }
+            }
+        }
+
+        private void ReleaseSharedBuffer(int bufferId)
+        {
+            if (bufferId <= 0) return;
+            lock (_bufferGate)
+            {
+                if (!_inFlightBuffers.TryGetValue(bufferId, out var buffer)) return;
+                _inFlightBuffers.Remove(bufferId);
+                _freeBuffers.Add(buffer);
+            }
         }
 
         private void StopVideo()
         {
-            if (_video == null) return;
-            try { _video.Stop(); } catch { }
+            var video = _video;
             _video = null;
+            _videoMode = null;
+            if (video != null) { try { video.Stop(); } catch { } }
+            DisposeSharedBuffers();
+        }
+
+        private void DisposeSharedBuffers()
+        {
+            List<CoreWebView2SharedBuffer> buffers;
+            lock (_bufferGate)
+            {
+                buffers = new List<CoreWebView2SharedBuffer>(_freeBuffers);
+                buffers.AddRange(_inFlightBuffers.Values);
+                _freeBuffers.Clear();
+                _inFlightBuffers.Clear();
+            }
+            foreach (var buffer in buffers)
+            {
+                try { buffer.Close(); } catch { }
+            }
         }
 
         private Dictionary<string, object> StartAudio(Dictionary<string, object> payload)
@@ -353,6 +499,13 @@ namespace PiikDesktop
         {
             if (map == null || !map.TryGetValue(key, out var value) || value == null) return "";
             return Convert.ToString(value);
+        }
+
+        internal static bool GetBool(Dictionary<string, object> map, string key)
+        {
+            if (map == null || !map.TryGetValue(key, out var value) || value == null) return false;
+            if (value is bool flag) return flag;
+            try { return Convert.ToBoolean(value, System.Globalization.CultureInfo.InvariantCulture); } catch { return false; }
         }
     }
 }

@@ -23,8 +23,16 @@ namespace PiikDesktop
         public string Message;
     }
 
+    internal interface IVideoCapture
+    {
+        int Width { get; }
+        int Height { get; }
+        void Start();
+        void Stop();
+    }
+
     /// <summary>Captures a screen or window with GDI and publishes JPEG frames.</summary>
-    internal sealed class VideoCapture
+    internal sealed class VideoCapture : IVideoCapture
     {
         private readonly DesktopSource _source;
         private readonly int _requestedWidth;

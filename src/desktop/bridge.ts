@@ -73,18 +73,27 @@ export interface DesktopVideoFrame {
   seq: number;
 }
 
+export interface DesktopVideoFrameRaw {
+  frame: VideoFrame;
+  width: number;
+  height: number;
+  seq: number;
+}
+
 export interface DesktopVideoStartOptions {
   sourceId: string;
   width: number;
   height: number;
   fps: number;
   native?: boolean;
+  raw?: boolean;
 }
 
 export interface DesktopVideoStartResult {
   ok: boolean;
   width?: number;
   height?: number;
+  mode?: 'raw' | 'jpeg';
   code?: string;
   message?: string;
 }
@@ -99,6 +108,7 @@ export interface DesktopBridge {
   startVideo(options: DesktopVideoStartOptions): Promise<DesktopVideoStartResult>;
   stopVideo(): Promise<{ ok: boolean }>;
   onVideoFrame(handler: (frame: DesktopVideoFrame) => void): () => void;
+  onVideoFrameRaw(handler: (frame: DesktopVideoFrameRaw) => void): () => void;
   onVideoEnded(handler: (info: { code: string; message: string }) => void): () => void;
   startAudio(options: { mode: 'system' | 'include' | 'exclude'; pid?: number | null }): Promise<DesktopAudioStartResult>;
   stopAudio(): Promise<{ ok: boolean }>;
