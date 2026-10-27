@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -17,11 +18,13 @@ namespace PiikDesktop
     internal sealed class RawVideoFrame
     {
         public byte[] Data;
+        public int Length;
         public int Width;
         public int Height;
         public int Stride;
         public long Sequence;
         public long TimestampUs;
+        public Action Release;
     }
 
     /// <summary>
@@ -95,6 +98,10 @@ namespace PiikDesktop
         private readonly Action<VideoEndedInfo> _onEnded;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private readonly object _gate = new object();
+        private readonly object _poolGate = new object();
+        private readonly Queue<byte[]> _frameBuffers = new Queue<byte[]>();
+        private int _bufferLength;
+        private bool _disposed;
         private volatile bool _running;
         private int _ended;
         private long _sequence;
@@ -241,9 +248,34 @@ namespace PiikDesktop
             if (Height < 2) Height = 2;
             _target = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
             _targetGraphics = Graphics.FromImage(_target);
-            _targetGraphics.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            _targetGraphics.InterpolationMode = _fps >= 50 ? InterpolationMode.Bilinear : InterpolationMode.HighQualityBilinear;
             _targetGraphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
             _targetGraphics.SmoothingMode = SmoothingMode.HighQuality;
+            _bufferLength = Width * 4 * Height;
+            for (var index = 0; index < 4; index++) _frameBuffers.Enqueue(new byte[_bufferLength]);
+        }
+
+        private byte[] RentBuffer(int length)
+        {
+            lock (_poolGate)
+            {
+                if (_disposed) return null;
+                while (_frameBuffers.Count > 0)
+                {
+                    var buffer = _frameBuffers.Dequeue();
+                    if (buffer.Length >= length) return buffer;
+                }
+                return null;
+            }
+        }
+
+        private void ReturnBuffer(byte[] buffer)
+        {
+            if (buffer == null) return;
+            lock (_poolGate)
+            {
+                if (!_disposed && buffer.Length >= _bufferLength) _frameBuffers.Enqueue(buffer);
+            }
         }
 
         private static int Even(int value)
@@ -302,17 +334,29 @@ namespace PiikDesktop
                 try
                 {
                     var stride = Math.Abs(data.Stride);
-                    var bytes = new byte[stride * Height];
-                    Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
-                    _onFrame(new RawVideoFrame
+                    var length = stride * Height;
+                    var bytes = RentBuffer(length);
+                    if (bytes == null) return;
+                    Marshal.Copy(data.Scan0, bytes, 0, length);
+                    try
                     {
-                        Data = bytes,
-                        Width = Width,
-                        Height = Height,
-                        Stride = stride,
-                        Sequence = _sequence++,
-                        TimestampUs = (long)(_clock.Elapsed.TotalMilliseconds * 1000),
-                    });
+                        _onFrame(new RawVideoFrame
+                        {
+                            Data = bytes,
+                            Length = length,
+                            Width = Width,
+                            Height = Height,
+                            Stride = stride,
+                            Sequence = _sequence++,
+                            TimestampUs = (long)(_clock.Elapsed.TotalMilliseconds * 1000),
+                            Release = () => ReturnBuffer(bytes),
+                        });
+                    }
+                    catch
+                    {
+                        ReturnBuffer(bytes);
+                        throw;
+                    }
                 }
                 finally { output.UnlockBits(data); }
             }
@@ -394,6 +438,11 @@ namespace PiikDesktop
                 _target = null;
                 _sourceBitmap?.Dispose();
                 _sourceBitmap = null;
+            }
+            lock (_poolGate)
+            {
+                _disposed = true;
+                _frameBuffers.Clear();
             }
             _item = null;
             _device = null;

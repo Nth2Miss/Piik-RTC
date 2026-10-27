@@ -7,26 +7,42 @@
   <style>
     :root {
       color-scheme: light dark;
-      --bg: #f3f5f8;
-      --paper: #fff;
-      --ink: #1b2430;
-      --muted: #6b7787;
-      --line: #e2e7ee;
-      --action: #2f7cf6;
-      --action-ink: #fff;
-      --danger: #c53b3b;
-      --shadow: 0 24px 70px rgba(27, 47, 79, .16);
+      --wall: #f3f5f8;
+      --wall-2: #e5eaf2;
+      --paper: #fffefb;
+      --ink: #29374a;
+      --muted: color-mix(in srgb, var(--ink) 75%, var(--paper));
+      --line: color-mix(in srgb, var(--ink) 20%, var(--paper));
+      --primary: #2765ce;
+      --primary-ink: #fff;
+      --action: #3478e5;
+      --control-edge: color-mix(in srgb, var(--ink) 57%, var(--paper));
+      --control-hover: #eef3ff;
+      --control-selected: #e5efff;
+      --surface-rim: rgb(255 255 255 / .95);
+      --surface-shade: rgb(36 53 78 / .18);
+      --surface-glaze: linear-gradient(165deg, rgb(255 255 255 / .6), transparent 65%, rgb(51 89 147 / .025));
+      --control-shadow: 0 3px 0 var(--surface-shade), 0 5px 10px color-mix(in srgb, var(--surface-shade) 45%, transparent);
+      --panel-shadow: inset 0 1px 0 var(--surface-rim), 0 3px 0 var(--surface-shade), 0 16px 36px color-mix(in srgb, var(--surface-shade) 55%, transparent);
+      --danger: #d64541;
+      --spring: cubic-bezier(.3, 1.45, .45, 1);
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #101722;
-        --paper: #182231;
-        --ink: #e9eef6;
-        --muted: #97a5b8;
-        --line: #2a3748;
-        --action: #4d91ff;
-        --danger: #ff8585;
-        --shadow: 0 24px 80px rgba(0, 0, 0, .45);
+        --wall: #242a34;
+        --wall-2: #2c3543;
+        --paper: #354153;
+        --ink: #f6f3eb;
+        --primary: #f6f3eb;
+        --primary-ink: #29374a;
+        --action: #f6f3eb;
+        --control-hover: #414f67;
+        --control-selected: #f6f3eb;
+        --surface-rim: rgb(222 234 255 / .12);
+        --surface-shade: rgb(6 12 22 / .38);
+        --surface-glaze: linear-gradient(165deg, rgb(224 237 255 / .06), transparent 65%, rgb(0 0 0 / .035));
+        --danger: #e25a52;
       }
     }
     * { box-sizing: border-box; }
@@ -35,97 +51,155 @@
       margin: 0;
       display: grid;
       place-items: center;
-      padding: 28px;
+      padding: 28px 20px;
       background:
-        radial-gradient(900px 500px at 15% 0%, color-mix(in srgb, var(--action) 12%, transparent), transparent 65%),
-        radial-gradient(700px 420px at 95% 100%, color-mix(in srgb, #59d3b3 10%, transparent), transparent 60%),
-        var(--bg);
+        radial-gradient(1000px 620px at 8% -12%, color-mix(in srgb, #3478e5 12%, transparent), transparent 62%),
+        radial-gradient(900px 580px at 102% 112%, color-mix(in srgb, #e77d38 9%, transparent), transparent 62%),
+        var(--wall);
       color: var(--ink);
-      font: 14px/1.65 "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+      font: 15px/1.5 var(--font);
+      -webkit-font-smoothing: antialiased;
     }
-    .card {
-      width: min(460px, 100%);
-      padding: 34px 34px 28px;
+    .launch {
+      display: grid;
+      justify-items: center;
+      gap: 22px;
+      width: min(500px, 100%);
+      text-align: center;
+    }
+    .brand-mark { display: block; color: var(--ink); overflow: visible; }
+    .heading { display: grid; justify-items: center; gap: 7px; }
+    .title { margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -.04em; }
+    .title small { margin-left: 6px; color: var(--muted); font-size: 15px; letter-spacing: 0; font-weight: 650; }
+    .title .dot { color: #e77d38; }
+    .welcome { margin: 0; color: var(--ink); font-size: 14px; font-weight: 600; }
+    .welcome .spark { color: #d7982b; margin-right: 6px; }
+    .panel {
+      width: 100%;
+      padding: 24px;
       border: 1px solid var(--line);
       border-radius: 26px;
-      background: var(--paper);
-      box-shadow: var(--shadow);
+      background: var(--surface-glaze) var(--paper);
+      box-shadow: var(--panel-shadow);
+      text-align: left;
     }
-    .mark {
-      display: grid;
-      place-items: center;
-      width: 58px;
-      height: 58px;
-      margin-bottom: 22px;
+    .panel-heading { display: grid; gap: 4px; margin-bottom: 18px; }
+    .panel-heading h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .panel-heading p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.65; }
+    .field-label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .input {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 48px;
+      padding: 0 12px;
+      border: 2px solid var(--control-edge);
       border-radius: 18px;
-      background: linear-gradient(145deg, #3f8cff, #1f5dd6);
-      color: #fff;
-      font: 800 27px/1 "Segoe UI", sans-serif;
-      letter-spacing: -1px;
-      box-shadow: 0 10px 24px rgba(47, 124, 246, .3);
+      background: var(--paper);
+      transition: border-color 140ms ease, background-color 140ms ease;
     }
-    h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: -.4px; }
-    .lead { margin: 0 0 24px; color: var(--muted); font-size: 12.5px; }
-    label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 650; }
-    input {
-      width: 100%;
-      height: 46px;
-      padding: 0 14px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--bg);
-      color: var(--ink);
-      font: 13px "Segoe UI", system-ui, sans-serif;
-      outline: none;
-      transition: border-color 140ms, box-shadow 140ms;
-    }
-    input:focus { border-color: var(--action); box-shadow: 0 0 0 3px color-mix(in srgb, var(--action) 18%, transparent); }
-    .actions { display: flex; gap: 10px; margin-top: 16px; }
-    button {
+    .input:focus-within { border-color: var(--action); outline: 3px solid var(--action); outline-offset: 2px; }
+    .input svg { flex: none; color: var(--muted); }
+    .input input {
+      min-width: 0;
       flex: 1;
-      height: 44px;
-      border: 1px solid transparent;
-      border-radius: 12px;
-      font: 600 13px "Microsoft YaHei UI", system-ui, sans-serif;
-      cursor: pointer;
-      transition: transform 120ms, opacity 120ms, background 120ms;
+      height: 100%;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-size: 15px;
     }
-    button:active { transform: scale(.985); }
-    button:disabled { opacity: .55; cursor: wait; }
-    .primary { background: var(--action); color: var(--action-ink); box-shadow: 0 8px 20px color-mix(in srgb, var(--action) 30%, transparent); }
-    .secondary { border-color: var(--line); background: transparent; color: var(--ink); }
-    .secondary[hidden] { display: none; }
+    .input input::placeholder { color: color-mix(in srgb, var(--muted) 70%, transparent); }
+    .hint { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+    .hint code { padding: 1px 5px; border-radius: 5px; background: var(--wall-2); font: 11px Consolas, monospace; color: var(--ink); }
+    .actions { display: flex; gap: 10px; margin-top: 18px; }
+    .btn {
+      display: inline-flex;
+      flex: 1;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: 48px;
+      padding: 0 18px;
+      border: 2px solid var(--control-edge);
+      border-radius: 999px;
+      background: var(--paper);
+      color: var(--ink);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      box-shadow: var(--control-shadow);
+      cursor: pointer;
+      transition: transform 260ms var(--spring), background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    }
+    .btn:hover:not(:disabled) { transform: translateY(-2px); background: var(--control-hover); border-color: var(--ink); }
+    .btn:active:not(:disabled) { transform: translateY(2px); box-shadow: none; transition-duration: 80ms; }
+    .btn:disabled { opacity: .55; cursor: wait; }
+    .btn.primary { border-color: var(--primary); background: var(--primary); color: var(--primary-ink); }
+    .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 88%, #000); border-color: var(--primary); }
+    .btn.secondary { flex: .82; }
+    .btn[hidden] { display: none; }
     .error {
       margin: 14px 0 0;
       padding: 10px 12px;
-      border-radius: 10px;
+      border-radius: 12px;
       background: color-mix(in srgb, var(--danger) 12%, transparent);
       color: var(--danger);
       font-size: 12px;
+      line-height: 1.6;
       white-space: pre-wrap;
     }
     .error[hidden] { display: none; }
-    .hint { margin: 18px 0 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
-    .hint code { padding: 1px 5px; border-radius: 5px; background: var(--bg); font: 11px Consolas, monospace; }
-    .footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 22px; color: var(--muted); font-size: 10.5px; }
+    .footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10.5px; }
+    .footnote { margin: 0; color: var(--muted); font-size: 11px; }
+    @media (prefers-reduced-motion: reduce) {
+      .btn { transition: none; }
+      .btn:hover:not(:disabled) { transform: none; }
+    }
   </style>
 </head>
 <body>
-  <main class="card">
-    <div class="mark">P</div>
-    <h1>连接 Piik-RTC 服务器</h1>
-    <p class="lead">桌面端需要连接一个已部署的 Piik-RTC 服务。程序、窗口和声音采集都在本机完成。</p>
-    <form id="form">
-      <label for="server">服务器地址</label>
-      <input id="server" name="server" type="url" placeholder="https://piik.example.com" autocomplete="url" spellcheck="false" required/>
-      <div class="actions">
-        <button class="primary" id="connect" type="submit">连接</button>
-        <button class="secondary" id="back" type="button" hidden>返回应用</button>
+  <main class="launch">
+    <header class="heading">
+      <svg class="brand-mark" width="64" height="64" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <rect x="4" y="8" width="24" height="18" rx="4"/>
+        <path d="m11 4 5 4 5-4"/>
+        <path d="M10 29l2-3m10 3-2-3"/>
+        <circle cx="11.5" cy="16.5" r="1.25" fill="currentColor" stroke="none"/>
+        <path d="M19 17c1.5-1.8 3.2-1.8 4.7 0"/>
+      </svg>
+      <h1 class="title">Piik-RTC<span class="dot">.</span><small>屏幕共享</small></h1>
+      <p class="welcome"><span class="spark">✦</span>不同的屏幕，同一个小客厅。</p>
+    </header>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <h2>连接你的小客厅</h2>
+        <p>桌面端需要连接一个已部署的 Piik-RTC 服务。程序、窗口和声音采集都在本机完成。</p>
       </div>
-      <p class="error" id="error" hidden></p>
-    </form>
-    <p class="hint">支持 <code>https://</code> 地址；本机调试可以使用 <code>http://localhost:3000</code>。邀请链接和房间数据来自同一台服务器。</p>
-    <footer class="footer"><span id="version"></span><span>Piik-RTC 桌面端</span></footer>
+      <form id="form">
+        <label class="field-label" for="server">服务器地址</label>
+        <label class="input">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          <input id="server" name="server" type="url" placeholder="https://piik.example.com" autocomplete="url" spellcheck="false" required/>
+        </label>
+        <p class="hint">支持 <code>https://</code> 地址；本机调试可以使用 <code>http://localhost:3000</code>。邀请链接和房间数据来自同一台服务器。</p>
+        <div class="actions">
+          <button class="btn primary" id="connect" type="submit">
+            <span>连接</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12h16m-6.5-6.5L20 12l-6.5 6.5"/></svg>
+          </button>
+          <button class="btn secondary" id="back" type="button" hidden>返回应用</button>
+        </div>
+        <p class="error" id="error" hidden></p>
+      </form>
+      <footer class="footer"><span id="version"></span><span>Piik-RTC 桌面端</span></footer>
+    </section>
+
+    <p class="footnote">本地采集 · 媒体不经过 Piik 服务器中转 · 支持声网 / 即构 / 火山</p>
   </main>
   <script>
     const params = new URLSearchParams(location.search);
@@ -159,7 +233,7 @@
       event.preventDefault();
       showError('');
       connect.disabled = true;
-      connect.textContent = '正在连接…';
+      connect.querySelector('span').textContent = '正在连接…';
       try {
         const result = await bridge.setServer(input.value.trim());
         if (!result || !result.ok) showError(result?.message || '无法连接这个服务器。');
@@ -167,7 +241,7 @@
         showError(error?.message || String(error));
       } finally {
         connect.disabled = false;
-        connect.textContent = '连接';
+        connect.querySelector('span').textContent = '连接';
       }
     });
 

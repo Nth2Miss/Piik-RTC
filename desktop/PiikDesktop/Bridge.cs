@@ -209,8 +209,9 @@ namespace PiikDesktop
             var wantRaw = GetBool(payload, "raw")
                 && width > 0 && height > 0
                 && (long)width * height <= 1920L * 1080L
-                && fps <= 30
-                && WgcCapture.IsSupported();
+                && fps <= 60
+                && WgcCapture.IsSupported()
+                && SupportsSharedBuffers();
             if (wantRaw)
             {
                 var capture = new WgcCapture(_selected, width, height, fps, PostRawFrame, EndVideo);
@@ -256,6 +257,16 @@ namespace PiikDesktop
             };
         }
 
+        private bool SupportsSharedBuffers()
+        {
+            try
+            {
+                var version = _core.Environment?.BrowserVersionString ?? "";
+                return int.TryParse(version.Split('.')[0], out var major) && major >= 93;
+            }
+            catch { return false; }
+        }
+
         private void EndVideo(VideoEndedInfo info)
         {
             Post(new Dictionary<string, object>
@@ -271,13 +282,27 @@ namespace PiikDesktop
             if (Interlocked.Increment(ref _pendingRawFrames) > 2)
             {
                 Interlocked.Decrement(ref _pendingRawFrames);
+                frame.Release?.Invoke();
                 return;
             }
-            if (_uiContext == null) { ShareRawFrame(frame); Interlocked.Decrement(ref _pendingRawFrames); return; }
+            if (_uiContext == null)
+            {
+                try { ShareRawFrame(frame); }
+                finally
+                {
+                    frame.Release?.Invoke();
+                    Interlocked.Decrement(ref _pendingRawFrames);
+                }
+                return;
+            }
             _uiContext.Post(_ =>
             {
                 try { ShareRawFrame(frame); }
-                finally { Interlocked.Decrement(ref _pendingRawFrames); }
+                finally
+                {
+                    frame.Release?.Invoke();
+                    Interlocked.Decrement(ref _pendingRawFrames);
+                }
             }, null);
         }
 
@@ -293,12 +318,12 @@ namespace PiikDesktop
                     var candidate = _freeBuffers[_freeBuffers.Count - 1];
                     _freeBuffers.RemoveAt(_freeBuffers.Count - 1);
                     if (candidate == null) continue;
-                    if (candidate.Size >= (ulong)frame.Data.Length) { buffer = candidate; break; }
+                    if (candidate.Size >= (ulong)frame.Length) { buffer = candidate; break; }
                     try { candidate.Close(); } catch { }
                 }
                 if (buffer == null && _freeBuffers.Count + _inFlightBuffers.Count < 4)
                 {
-                    try { buffer = _core.Environment.CreateSharedBuffer((ulong)frame.Data.Length); }
+                    try { buffer = _core.Environment.CreateSharedBuffer((ulong)frame.Length); }
                     catch (Exception exception) { Log.Write("shared buffer create failed: " + exception.Message); return; }
                 }
                 // Backpressure: the renderer keeps at most a few buffers in flight.
@@ -308,7 +333,7 @@ namespace PiikDesktop
             }
             try
             {
-                using (var stream = buffer.OpenStream()) stream.Write(frame.Data, 0, frame.Data.Length);
+                using (var stream = buffer.OpenStream()) stream.Write(frame.Data, 0, frame.Length);
                 var payload = new Dictionary<string, object>
                 {
                     ["type"] = "video-frame-raw",
