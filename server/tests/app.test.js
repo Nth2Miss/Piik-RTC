@@ -259,7 +259,7 @@ test('rejects cross-origin writes and disables API response caching', async t =>
   assert.equal(created.status, 201); assert.equal(created.headers.get('cache-control'), 'no-store');
 });
 test('rooms and memberships persist after closing and reopening SQLite', async () => {
-  const filename = join(tmpdir(), `piik-sw-test-${randomUUID()}.sqlite`);
+  const filename = join(tmpdir(), `piik-rtc-test-${randomUUID()}.sqlite`);
   let store;
   try {
     store = new RoomStore(filename);

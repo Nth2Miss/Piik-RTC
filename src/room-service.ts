@@ -216,7 +216,7 @@ export function createRoomService() {
     const navigation = navigator as Navigator & { deviceMemory?: number };
     return {
       capturedAt:new Date().toISOString(),
-      app:{ name:'piik-sw', sdk:state.room?.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${AgoraRTC.VERSION}`, secureContext:window.isSecureContext },
+      app:{ name:'piik-rtc', sdk:state.room?.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${AgoraRTC.VERSION}`, secureContext:window.isSecureContext },
       environment:{
         userAgent:navigator.userAgent, platform:navigator.platform, language:navigator.language,
         languages:[...navigator.languages], hardwareConcurrency:navigator.hardwareConcurrency,
@@ -246,7 +246,7 @@ export function createRoomService() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `piik-sw-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    link.download = `piik-rtc-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify('诊断信息已导出，可附在问题反馈中。');

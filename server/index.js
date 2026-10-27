@@ -21,7 +21,7 @@ if (process.argv.includes('--production')) {
 const server = http.createServer(app);
 const realtime = attachRealtime(server, app, process.env);
 const port = Number(process.env.PORT || 3000);
-server.listen(port, '0.0.0.0', () => console.log(`Piik-sw 已启动：http://localhost:${port}`));
+server.listen(port, '0.0.0.0', () => console.log(`Piik-RTC 已启动：http://localhost:${port}`));
 const shutdown = () => {
   realtime.close();
   server.close(() => { app.locals.close(); process.exit(0); });

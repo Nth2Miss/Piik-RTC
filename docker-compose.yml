@@ -1,8 +1,8 @@
 services:
-  piik-sw:
-    image: ghcr.io/nth2miss/piik-sw:latest
+  piik-rtc:
+    image: ghcr.io/nth2miss/piik-rtc:latest
     pull_policy: always
-    container_name: piik-sw
+    container_name: piik-rtc
     restart: unless-stopped
     env_file:
       - .env
@@ -12,8 +12,8 @@ services:
     ports:
       - "${SCREEN_PORT:-3000}:3000"
     volumes:
-      - piik-sw-data:/app/data
+      - piik-rtc-data:/app/data
 
 volumes:
-  piik-sw-data:
-    name: piik-sw-data
+  piik-rtc-data:
+    name: piik-rtc-data
