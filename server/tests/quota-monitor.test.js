@@ -85,16 +85,16 @@ test('即构各档位及自然月分别累计，历史估算保持不变', async
   assert.ok(Math.abs(store.quota('zego', '2026-10').estimated + store.zegoRoundingReserve('2026-10') - 7.1) < 1e-9);
 });
 
-test('余额低于 15 分钟关闭同服务商所有房间，恰好 15 不关闭', async t => {
+test('余额达到 500 分钟保护线时关闭该服务商所有房间', async t => {
   const store = new RoomStore(); t.after(() => store.close());
   const now = Date.parse('2026-10-20T00:00:00Z'); room(store, 'one', 'volc', now); room(store, 'two', 'volc', now); room(store, 'other', 'zego', now);
-  store.addUsage('volc', '2026-10', 'one', 9985);
+  store.addUsage('volc', '2026-10', 'one', 9499.99);
   const closed = [];
   const monitor = new QuotaMonitor(store, new Map(), empty, (room, reason) => { closed.push([room.id, reason]); store.archive(room.id, reason); }, () => now);
   await monitor.check(); assert.equal(closed.length, 0);
   store.addUsage('volc', '2026-10', 'two', 0.01);
   await monitor.check(); assert.deepEqual(closed.map(x => x[0]).sort(), ['one','two']);
-  assert.match(closed[0][1], /不足 15 分钟/); assert.ok(store.get('other'));
+  assert.match(closed[0][1], /500 分钟保护线/); assert.ok(store.get('other'));
 });
 
 test('监控成功后提供短期存活确认，超时后停止确认', async t => {
@@ -128,16 +128,17 @@ test('声网供应商快照与本地增量取保守值，不将已上报的用�
   upstream = 34; assert.equal((await monitor.snapshot()).agora.remaining, 34);
 });
 
-test('火山使用资源包余额快照并扣除之后的本地用量', async t => {
+test('火山按应用用量推算余量并扣除后续本地用量，不沿用旧资源包快照', async t => {
   const store = new RoomStore(); t.after(() => store.close());
-  const now = Date.parse('2026-10-20T00:00:00Z'); let upstream = 20000;
-  const usage = async () => ({ agora:{status:'unconfigured'}, zego:{status:'unavailable'}, volc:{status:'ok',remaining:upstream,total:20000,unit:'分钟'} });
+  const now = Date.parse('2026-10-20T00:00:00Z'); let upstream = 9500;
+  store.quota('volc','2026-10'); store.setQuotaAnchor('volc','2026-10',20000,0);
+  const usage = async () => ({ agora:{status:'unconfigured'}, zego:{status:'unavailable'}, volc:{status:'ok',remaining:upstream,total:10000,unit:'分钟'} });
   const monitor = new QuotaMonitor(store, new Map(), usage, () => {}, () => now);
-  assert.equal((await monitor.snapshot()).volc.remaining, 20000);
+  assert.equal((await monitor.snapshot()).volc.remaining, 9500);
   store.addUsage('volc', '2026-10', 'room', 4);
-  assert.equal((await monitor.snapshot()).volc.remaining, 19996);
-  upstream = 19990;
-  assert.equal((await monitor.snapshot()).volc.remaining, 19990);
+  assert.equal((await monitor.snapshot()).volc.remaining, 9496);
+  upstream = 9490;
+  assert.equal((await monitor.snapshot()).volc.remaining, 9490);
 });
 
 test('即构供应商额度与本地估算分别显示，并按保守值保护', async t => {

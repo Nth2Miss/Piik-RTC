@@ -1,6 +1,7 @@
 import { PRESENCE_LIFETIME } from '../rooms/lifecycle.js';
 
 const names = { agora:'声网', volc:'火山引擎', zego:'即构' };
+export const QUOTA_RESERVE_MINUTES = 500;
 const monthOf = time => new Date(time + 8 * 3600_000).toISOString().slice(0, 7);
 function nextMonth(time) {
   const [year, month] = monthOf(time).split('-').map(Number);
@@ -88,25 +89,28 @@ export class QuotaMonitor {
     const month = monthOf(at), output = { ...raw };
     for (const provider of ['agora', 'zego', 'volc']) {
       let q = this.store.quota(provider, month);
+      // RTC usage is an app-level estimate, so never reuse old billing-package anchors.
+      const anchorKey = provider === 'volc' ? 'volc-usage' : provider;
+      let anchor = provider === 'volc' ? this.store.quota(anchorKey, month) : q;
       const upstream = raw[provider];
       // Reserve a full minute for each partially used ZEGO tier across the billing month.
       const estimated = provider === 'zego'
         ? Math.round((q.estimated + this.store.zegoRoundingReserve(month)) * 1e9) / 1e9
         : q.estimated;
-      if (upstream?.status === 'ok' && Number.isFinite(upstream.remaining) && q.anchor_remaining === null) {
-        this.store.setQuotaAnchor(provider, month, upstream.remaining, estimated);
-        q = this.store.quota(provider, month);
+      if (upstream?.status === 'ok' && Number.isFinite(upstream.remaining) && anchor.anchor_remaining === null) {
+        this.store.setQuotaAnchor(anchorKey, month, upstream.remaining, estimated);
+        anchor = this.store.quota(anchorKey, month);
       }
-      if (provider === 'agora' && q.anchor_remaining === null) {
+      if (provider === 'agora' && anchor.anchor_remaining === null) {
         output[provider] = { ...upstream, status:upstream?.status || 'unavailable', supplier:upstream || {status:'unavailable'}, localUsed:q.estimated, basis:'等待供应商余量' };
         continue;
       }
-      let remaining = Math.max(0, q.anchor_remaining === null ? 10000 - estimated : q.anchor_remaining - Math.max(0, estimated - q.anchor_estimated));
+      let remaining = Math.max(0, anchor.anchor_remaining === null ? 10000 - estimated : anchor.anchor_remaining - Math.max(0, estimated - anchor.anchor_estimated));
       if (upstream?.status === 'ok' && Number.isFinite(upstream.remaining)) remaining = Math.max(0, Math.min(remaining, upstream.remaining));
-      if (provider === 'zego') remaining = Math.min(remaining, Math.max(0, 10000 - estimated));
+      if (provider === 'zego' || provider === 'volc') remaining = Math.min(remaining, Math.max(0, 10000 - estimated));
       output[provider] = { ...upstream, status:'ok', total:upstream?.total ?? 10000, remaining, unit:upstream?.unit || '标准分钟', estimated:true, localUsed:estimated,
         supplier:upstream || {status:'unavailable'},
-        basis:q.anchor_remaining !== null ? '供应商余量与本地估算' : '本地估算' };
+        basis:anchor.anchor_remaining !== null ? (provider === 'zego' ? '控制台余量与本地估算' : '供应商用量推算与本地估算') : '本地估算' };
     }
     return output;
   }
@@ -117,7 +121,7 @@ export class QuotaMonitor {
       const status = await this.snapshot();
       for (const room of this.store.all()) {
         const provider = room.provider || 'agora';
-        if (status[provider]?.remaining < 15) this.closeRoom(room, `${names[provider]}预计可用时长不足 15 分钟，房间已关闭。`);
+        if (status[provider]?.remaining <= QUOTA_RESERVE_MINUTES) this.closeRoom(room, `${names[provider]}预计可用时长已达到 500 分钟保护线，房间已关闭。`);
       }
       this.lastSuccessfulCheck = this.now();
       return status;

@@ -168,6 +168,7 @@
 .sw-usage-details section { display:grid; gap:7px; }
 .sw-usage-details section+section { padding-top:12px; border-top:1px solid var(--line); }
 .sw-usage-details h4 { font-size:12px; color:var(--muted); }
+.sw-usage-note { padding-top:12px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; line-height:1.6; }
 .sw-usage-details dl { display:grid; grid-template-columns:auto 1fr; gap:5px 12px; font-size:12px; }
 .sw-usage-details dt { color:var(--muted); }
 .sw-usage-details dd { text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }

@@ -72,7 +72,7 @@ test('websocket pushes sharing changes without client polling', async t => {
   assert.equal(pushed.participants.find(person => person.uid === host.uid).sharing, true);
 });
 
-test('低于 15 分钟立即通知成员并拒绝房间续期', async t => {
+test('达到 500 分钟保护线时通知成员并拒绝房间续期', async t => {
   let remaining = 10000;
   const app = createApp(credentials, new RoomStore(), { usageService: async () => ({ agora:{ status:'ok', remaining, total:10000 }, volc:{ status:'unavailable' }, zego:{ status:'unavailable' } }) });
   const server = createServer(app); const realtime = attachRealtime(server, app, credentials);
@@ -86,8 +86,8 @@ test('低于 15 分钟立即通知成员并拒绝房间续期', async t => {
   socket.send(JSON.stringify({ type:'subscribe', roomId:room.id, sessionKey:token.sessionKey }));
   await waitFor(socket, message => message.type === 'room');
   const closed = waitFor(socket, message => message.type === 'closed');
-  remaining = 14.9; await app.locals.monitor.check();
-  assert.match((await closed).reason, /不足 15 分钟/);
+  remaining = 500; await app.locals.monitor.check();
+  assert.match((await closed).reason, /500 分钟保护线/);
   const renewal = await call(base, cookie, `/api/rooms/${room.id}/token`, { sessionKey:token.sessionKey });
-  assert.equal(renewal.status, 404); assert.match(renewal.data.error, /不足 15 分钟/);
+  assert.equal(renewal.status, 404); assert.match(renewal.data.error, /500 分钟保护线/);
 });

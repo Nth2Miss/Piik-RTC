@@ -29,6 +29,10 @@ export class RoomStore {
         month TEXT NOT NULL, rate REAL NOT NULL, milliseconds INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (month, rate)
       );
+      CREATE TABLE IF NOT EXISTS volc_daily_usage (
+        appId TEXT NOT NULL, day TEXT NOT NULL, minutes REAL NOT NULL,
+        PRIMARY KEY (appId, day)
+      );
     `);
     const columns = this.db.prepare('PRAGMA table_info(rooms)').all().map(c => c.name);
     if (!columns.includes('emptySince')) this.db.exec('ALTER TABLE rooms ADD COLUMN emptySince INTEGER');
@@ -85,6 +89,16 @@ export class RoomStore {
   }
   setQuotaAnchor(provider, month, remaining, estimated) {
     this.db.prepare('UPDATE rtc_quota SET anchor_remaining=?,anchor_estimated=? WHERE provider=? AND month=? AND anchor_remaining IS NULL').run(remaining, estimated, provider, month);
+  }
+  volcDaily(appId, month) {
+    return this.db.prepare('SELECT day, minutes FROM volc_daily_usage WHERE appId=? AND day>=? AND day<? ORDER BY day')
+      .all(appId, `${month}-01`, `${month}-32`);
+  }
+  saveVolcDaily(appId, rows) {
+    const put = this.db.prepare('INSERT INTO volc_daily_usage(appId,day,minutes) VALUES (?,?,?) ON CONFLICT(appId,day) DO UPDATE SET minutes=excluded.minutes');
+    this.db.exec('BEGIN');
+    try { for (const row of rows) put.run(appId, row.day, row.minutes); this.db.exec('COMMIT'); }
+    catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   close() { this.db.close(); }
 }

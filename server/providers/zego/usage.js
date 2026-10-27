@@ -55,6 +55,6 @@ export function createZegoUsage(env, fetcher = fetch, now = Date.now) {
     if (result?.code !== 0 || result.data?.remained_time === null || result.data?.remained_time === undefined || String(result.data.remained_time).trim() === '') throw new Error('即构余量响应无效');
     const remaining = Number(result.data.remained_time);
     if (!Number.isFinite(remaining) || remaining < 0 || remaining > 10000) throw new Error('即构余量响应无效');
-    return {status:'ok', remaining, total:10000, used:10000 - remaining, unit:'标准分钟'};
+    return {status:'ok', kind:'console_quota', remaining, total:10000, used:10000 - remaining, unit:'标准分钟'};
   };
 }

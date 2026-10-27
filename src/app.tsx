@@ -15,13 +15,13 @@ import { inviteUrl, type ConnectionSnapshot, type RoomService, type RoomState } 
 import { usernameError } from './username';
 import type { Room } from './types';
 
-type Usage = { status:string; total?:number; used?:number; remaining?:number; unit?:string; from?:string; to?:string; packages?:number; estimated?:boolean; localUsed?:number; basis?:string; supplier?:Usage };
+type Usage = { status:string; total?:number; used?:number; remaining?:number; unit?:string; from?:string; to?:string; packages?:number; estimated?:boolean; localUsed?:number; basis?:string; supplier?:Usage; kind?:string; queriedFrom?:string; missingDays?:string[]; delayHours?:number };
 type ServiceStatus = { agora:Usage; volc:Usage; zego:Usage; updatedAt:string; cacheSeconds:number };
 const providerNames = { agora:'声网', zego:'即构 ZEGO', volc:'火山引擎' } as const;
 const providerKeys = ['agora','zego','volc'] as const;
-const lowBalance = (usage?:Usage) => usage?.status === 'ok' && typeof usage.remaining === 'number' && Number.isFinite(usage.remaining) && usage.remaining < 30;
-const formatAmount = (value?:number) => value === undefined ? '—' : (value < 30 ? Math.floor(value * 100) / 100 : value).toLocaleString('zh-CN', { maximumFractionDigits:2 });
-const usageMessage = (usage?:Usage) => !usage ? '正在查询…' : usage.status === 'unconfigured' ? '尚未配置查询凭据' : usage.status === 'auth_expired' ? '控制台登录已失效，请更新 Cookie' : usage.status === 'unavailable' ? '余量查询暂未接入' : '查询失败或数据无法换算';
+const lowBalance = (usage?:Usage) => usage?.status === 'ok' && typeof usage.remaining === 'number' && Number.isFinite(usage.remaining) && usage.remaining <= 500;
+const formatAmount = (value?:number) => value === undefined ? '—' : (value <= 500 ? Math.floor(value * 100) / 100 : value).toLocaleString('zh-CN', { maximumFractionDigits:2 });
+const usageMessage = (usage?:Usage) => !usage ? '正在查询…' : usage.status === 'unconfigured' ? '尚未配置查询凭据' : usage.status === 'auth_expired' ? '控制台登录已失效，请更新 Cookie' : usage.status === 'forbidden' ? '缺少火山 RTC 用量查询权限（rtc:ListUsages）' : usage.status === 'unavailable' ? '余量查询暂未接入' : '查询失败或数据无法换算';
 function useServiceStatus(enabled = true) {
   const [data, setData] = useState<ServiceStatus>();
   const [error, setError] = useState(false);
@@ -48,19 +48,22 @@ function UsageProgress({ name, usage }: { name:string; usage:Usage }) {
   const level = lowBalance(usage) || percentage <= 20 ? 'low' : percentage <= 50 ? 'medium' : 'high';
   return <div className={`sw-usage-progress is-${level}`} role="progressbar" aria-label={`${name}剩余额度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percentage)} aria-valuetext={`预计剩余 ${formatAmount(usage.remaining)} ${usage.unit || '分钟'}`}><span style={{ width:`${percentage}%` }}/></div>;
 }
-function UsageDetails({ name, usage }: {name:string; usage:Usage}) {
+function UsageDetails({ name, usage, queriedAt }: {name:string; usage:Usage; queriedAt?:string}) {
   const supplier = usage.supplier;
   const unit = usage.unit || '分钟';
-  return <div className="sw-usage-details"><section><h4>服务商额度</h4><UsageProgress name={`${name}服务商`} usage={supplier || {status:'unavailable'}}/>{supplier?.status === 'ok' ? <dl><dt>剩余</dt><dd>{formatAmount(supplier.remaining)} {supplier.unit || unit}</dd><dt>总额度</dt><dd>{formatAmount(supplier.total)} {supplier.unit || unit}</dd>{supplier.used !== undefined && <><dt>已用</dt><dd>{formatAmount(supplier.used)} {supplier.unit || unit}</dd></>}{supplier.packages !== undefined && <><dt>有效资源包</dt><dd>{supplier.packages} 个</dd></>}</dl> : <p className="sw-connection-empty">{usageMessage(supplier)}</p>}</section>
-    <section><h4>本地估算与保护</h4><UsageProgress name={`${name}本地估算`} usage={usage}/><dl><dt>预计可用</dt><dd>{formatAmount(usage.remaining)} {unit}</dd><dt>本月本地用量</dt><dd>{formatAmount(usage.localUsed)} {unit}</dd></dl><p className="sw-connection-empty">{usage.basis || '等待数据'}</p>{lowBalance(usage) && <p className="sw-usage-warning">剩余不足 30 分钟，暂不可选择。</p>}</section></div>;
+  const usageEstimate = supplier?.kind === 'usage_estimate';
+  const consoleQuota = supplier?.kind === 'console_quota';
+  return <div className="sw-usage-details"><section><h4>{usageEstimate ? '供应商用量统计' : consoleQuota ? '控制台免费余量' : '供应商查询'}</h4><UsageProgress name={`${name}服务商`} usage={supplier || {status:'unavailable'}}/>{supplier?.status === 'ok' || (usageEstimate && supplier?.status === 'partial') ? <dl>{supplier.remaining !== undefined && <><dt>{usageEstimate ? '估算剩余' : '剩余'}</dt><dd>{formatAmount(supplier.remaining)} {supplier.unit || unit}</dd><dt>{usageEstimate || consoleQuota ? '每月估算额度' : '总额度'}</dt><dd>{formatAmount(supplier.total)} {supplier.unit || unit}</dd></>}{supplier.used !== undefined && <><dt>{usageEstimate ? '已统计用量' : consoleQuota ? '推算已用' : '已用'}</dt><dd>{formatAmount(supplier.used)} {supplier.unit || unit}</dd></>}{supplier.packages !== undefined && <><dt>有效资源包</dt><dd>{supplier.packages} 个</dd></>}</dl> : <p className="sw-connection-empty">{usageMessage(supplier)}</p>}</section>
+    <section><h4>本地估算与保护</h4><UsageProgress name={`${name}本地估算`} usage={usage}/><dl><dt>预计可用</dt><dd>{formatAmount(usage.remaining)} {unit}</dd><dt>本月本地用量</dt><dd>{formatAmount(usage.localUsed)} {unit}</dd></dl><p className="sw-connection-empty">{usage.basis || '等待数据'}</p>{lowBalance(usage) && <p className="sw-usage-warning">已达到 500 分钟保护线，暂不可选择。</p>}</section>
+    <p className="sw-usage-note">{usageEstimate ? <>来源：供应商用量统计。{supplier.from && supplier.to && ` 查询范围：${supplier.from} 至 ${supplier.to}。`}{supplier.delayHours !== undefined && ` 数据约延迟 ${supplier.delayHours} 小时。`} 余量按每月 10,000 分钟推算。{supplier.missingDays?.length ? ` 缺少 ${supplier.missingDays.join('、')}，无法计算完整月度余量。` : ''}</> : consoleQuota ? '来源：即构控制台当月免费余量；总额度及已用量按每月 10,000 分钟推算。' : '供应商查询结果暂不可用。'}{queriedAt && ` 本系统查询时间：${new Date(queriedAt).toLocaleString('zh-CN')}。`}</p></div>;
 }
 function ServiceStatusPage({ providers, ready }: {providers:RoomState['providers']; ready:boolean}) {
   const { data, error, refresh } = useServiceStatus();
   const configured = providerKeys.filter(key => providers[key]);
   return <main className="lr-room sw-lobby"><header className="sw-lobby-heading"><div><h1>服务状态</h1><p>查看各 RTC 服务的用量和资源包余量。</p></div><Action icon="refresh" onClick={refresh}>刷新</Action></header>
     {(!ready || (!data && !error)) && <p>正在查询…</p>}{error && <p role="alert">状态查询失败，请稍后重试。</p>}{ready && !configured.length && <p>暂无已配置的 RTC 服务商。</p>}
-    <div className="sw-connection-grid">{data && configured.map(key => <section className="sw-connection-card sw-usage-card" key={key}><h3>{providerNames[key]}</h3><UsageDetails name={providerNames[key]} usage={data[key]}/></section>)}</div>
-    {configured.length > 0 && <p className="sw-settings-note">余量比例：绿色高于 50%，橙色为 20%–50%，红色不超过 20% 或不足 30 分钟。上方为供应商查询数据，下方是用于房间保护的本地估算。部分服务商未取得供应商余量时按每月 10,000 分钟估算。预计剩余不足 15 分钟时关闭该服务商的房间。{data && ` 供应商数据更新于 ${new Date(data.updatedAt).toLocaleString('zh-CN')}，缓存 ${data.cacheSeconds} 秒。`}</p>}
+    <div className="sw-connection-grid">{data && configured.map(key => <section className="sw-connection-card sw-usage-card" key={key}><h3>{providerNames[key]}</h3><UsageDetails name={providerNames[key]} usage={data[key]} queriedAt={data.updatedAt}/></section>)}</div>
+    {configured.length > 0 && <p className="sw-settings-note">上方为供应商查询数据，下方是用于房间保护的本地估算。火山数据按应用统计，不等于资源包实际余额，最终以账单为准。部分服务商未取得供应商余量时按每月 10,000 分钟估算。预计剩余达到或低于 500 分钟时关闭该服务商的房间。{data && ` 供应商数据更新于 ${new Date(data.updatedAt).toLocaleString('zh-CN')}，缓存 ${data.cacheSeconds} 秒。`}</p>}
     <a className="lr-btn" href="#">返回大厅</a></main>;
 }
 function HelpUsage({ currentProvider, providers, ready }: { currentProvider?: keyof typeof providerNames; providers:RoomState['providers']; ready:boolean }) {
@@ -71,7 +74,7 @@ function HelpUsage({ currentProvider, providers, ready }: { currentProvider?: ke
     {ready && !configured.length && <p>暂无已配置的 RTC 服务商。</p>}
     <div className="sw-help-usage-list">{configured.map(key => {
       const usage = data?.[key];
-      return <div className="sw-help-usage-item" key={key}><div className="sw-help-usage-title"><strong>{providerNames[key]}{currentProvider === key && <small>当前房间</small>}</strong></div>{usage ? <UsageDetails name={providerNames[key]} usage={usage}/> : <p>{error ? '查询失败' : '正在查询…'}</p>}</div>;
+      return <div className="sw-help-usage-item" key={key}><div className="sw-help-usage-title"><strong>{providerNames[key]}{currentProvider === key && <small>当前房间</small>}</strong></div>{usage ? <UsageDetails name={providerNames[key]} usage={usage} queriedAt={data?.updatedAt}/> : <p>{error ? '查询失败' : '正在查询…'}</p>}</div>;
     })}</div>
     <p className="sw-settings-note">余量为估算值，供应商查询按服务端缓存更新。{data && ` 数据更新于 ${new Date(data.updatedAt).toLocaleString('zh-CN')}。`}</p>
   </section>;
@@ -286,7 +289,7 @@ function RoomEditor({ room, state, service, close, busy }: { room?:Room; state:R
     if (available) setProvider(available);
   }, [room, status, provider, state.providers]);
   return <Modal title={room ? '编辑房间' : '给大家留个位置。'} close={close}><form className="sw-form" onSubmit={async event => { event.preventDefault(); const form = new FormData(event.currentTarget); if (await service.saveRoom({ name:String(form.get('name')),description:String(form.get('description')),provider },room)) close(); }}>
-    <label>房间名称 {!room && <small>选填</small>}<span className="lr-input"><Glyph name="tv"/><input name="name" defaultValue={room?.name} placeholder={room ? '请输入房间名称' : `留空使用用户名：${state.name}`} required={!!room} maxLength={40} autoFocus/></span></label><label>房间描述 <small>选填</small><textarea name="description" defaultValue={room?.description} placeholder="正在分享什么，想一起做什么？" maxLength={160} rows={3}/></label>{!room && <fieldset className="sw-provider-list"><legend>RTC 服务商</legend>{providerKeys.filter(key => state.providers[key]).map(key => { const usage = status?.[key]; return <label key={key}><input type="radio" name="provider" checked={provider === key} onChange={() => setProvider(key)} disabled={!state.providers[key] || lowBalance(usage)}/><span className="sw-provider-content"><span className="sw-provider-heading"><strong>{providerNames[key]}</strong><small>{!state.providers[key] ? '未配置' : usage?.status === 'ok' ? `预计剩余 ${formatAmount(usage.remaining)} / ${formatAmount(usage.total)} ${usage.unit || '分钟'}${lowBalance(usage) ? ' · 不足 30 分钟' : ''}` : statusError && !usage ? '查询失败' : usageMessage(usage)}</small></span><UsageProgress name={providerNames[key]} usage={usage || {status:'loading'}}/></span></label>; })}<p className="sw-settings-note">余量不足 30 分钟时不可选择；同一房间的成员使用同一家服务商，创建后不可更改。</p></fieldset>}<p className="sw-settings-note">房间会出现在大厅，空置 15 分钟后自动关闭。</p><Action icon="arrowRight" primary type="submit" disabled={busy || (!room && (!state.providers[provider] || lowBalance(status?.[provider])))}>{room ? '保存修改' : '创建并进入'}</Action>
+    <label>房间名称 {!room && <small>选填</small>}<span className="lr-input"><Glyph name="tv"/><input name="name" defaultValue={room?.name} placeholder={room ? '请输入房间名称' : `留空使用用户名：${state.name}`} required={!!room} maxLength={40} autoFocus/></span></label><label>房间描述 <small>选填</small><textarea name="description" defaultValue={room?.description} placeholder="正在分享什么，想一起做什么？" maxLength={160} rows={3}/></label>{!room && <fieldset className="sw-provider-list"><legend>RTC 服务商</legend>{providerKeys.filter(key => state.providers[key]).map(key => { const usage = status?.[key]; return <label key={key}><input type="radio" name="provider" checked={provider === key} onChange={() => setProvider(key)} disabled={!state.providers[key] || lowBalance(usage)}/><span className="sw-provider-content"><span className="sw-provider-heading"><strong>{providerNames[key]}</strong><small>{!state.providers[key] ? '未配置' : usage?.status === 'ok' ? `预计剩余 ${formatAmount(usage.remaining)} / ${formatAmount(usage.total)} ${usage.unit || '分钟'}${lowBalance(usage) ? ' · 达到 500 分钟保护线' : ''}` : statusError && !usage ? '查询失败' : usageMessage(usage)}</small></span><UsageProgress name={providerNames[key]} usage={usage || {status:'loading'}}/></span></label>; })}<p className="sw-settings-note">余量达到或低于 500 分钟时不可选择；同一房间的成员使用同一家服务商，创建后不可更改。</p></fieldset>}<p className="sw-settings-note">房间会出现在大厅，空置 15 分钟后自动关闭。</p><Action icon="arrowRight" primary type="submit" disabled={busy || (!room && (!state.providers[provider] || lowBalance(status?.[provider])))}>{room ? '保存修改' : '创建并进入'}</Action>
   </form></Modal>;
 }
 function App({ service }: { service:RoomService }) {

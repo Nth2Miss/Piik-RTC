@@ -160,7 +160,7 @@ export function createRoomService() {
     noticeTimer = setTimeout(() => emit({ notice:undefined }), 9000);
   }
   function notifyClosure(message:string) {
-    if (message.includes('不足 15 分钟')) emit({ budgetAlert:message });
+    if (message.includes('达到 500 分钟保护线')) emit({ budgetAlert:message });
     else notify(message, true);
   }
   function connectionSnapshot(): ConnectionSnapshot {

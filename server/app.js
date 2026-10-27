@@ -8,7 +8,7 @@ import { createUsageService } from './quota/usage.js';
 import { agoraToken } from './providers/agora/token.js';
 import { zegoToken } from './providers/zego/token.js';
 import { volcToken } from './providers/volc/token.js';
-import { QuotaMonitor, normalizeMedia } from './quota/monitor.js';
+import { QuotaMonitor, normalizeMedia, QUOTA_RESERVE_MINUTES } from './quota/monitor.js';
 
 const secret = () => randomBytes(24).toString('base64url');
 const hour = 3600;
@@ -39,7 +39,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   const zegoId = Number(env.ZEGO_APP_ID);
   const zegoConfigured = Number.isInteger(zegoId) && zegoId > 0 && zegoId <= 0xffffffff && Buffer.byteLength(env.ZEGO_SERVER_SECRET || '') === 32;
   const volcConfigured = (env.VOLC_RTC_APP_ID || '').length === 24 && !!env.VOLC_RTC_APP_KEY;
-  const usage = options.usageService || createUsageService(env);
+  const usage = options.usageService || createUsageService(env, undefined, undefined, store);
   const monitor = new QuotaMonitor(store, sessions, usage, (room, reason) => {
     store.archive(room.id, reason);
     for (const [key, session] of sessions) if (session.roomId === room.id) sessions.delete(key);
@@ -132,8 +132,8 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     if (!fields) return res.status(400).json({ error: '房间名称最多 40 字，描述最多 160 字。' });
     const status = await monitor.check();
     const remaining = status[provider];
-    if (remaining?.status === 'ok' && typeof remaining.remaining === 'number' && Number.isFinite(remaining.remaining) && remaining.remaining < 30) {
-      return res.status(403).json({ error: '所选服务商剩余时长不足 30 分钟，请选择其他服务商。' });
+    if (remaining?.status === 'ok' && typeof remaining.remaining === 'number' && Number.isFinite(remaining.remaining) && remaining.remaining <= QUOTA_RESERVE_MINUTES) {
+      return res.status(403).json({ error: '所选服务商剩余时长已达到 500 分钟保护线，请选择其他服务商。' });
     }
     lifecycle.sweep();
     if (store.count(req.identity) >= 50) return res.status(429).json({ error: '创建的房间太多，请关闭不用的房间。' });
@@ -163,7 +163,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   app.post('/api/rooms/:id/token', access, async (req, res) => {
     if (!(req.room.provider === 'zego' ? zegoConfigured : req.room.provider === 'volc' ? volcConfigured : configured)) return res.status(503).json({ error: '该房间的服务端 RTC 凭据尚未配置。' });
     const status = await monitor.check();
-    if (status[req.room.provider || 'agora']?.remaining < 15 || !store.get(req.room.id)) return res.status(403).json({ error: '服务商预计可用时长不足 15 分钟，房间已关闭。' });
+    if (status[req.room.provider || 'agora']?.remaining <= QUOTA_RESERVE_MINUTES || !store.get(req.room.id)) return res.status(403).json({ error: '服务商预计可用时长已达到 500 分钟保护线，房间已关闭。' });
     let session = req.body?.sessionKey && sessions.get(req.body.sessionKey);
     if (req.body?.sessionKey && (!session || session.roomId !== req.room.id || session.userId !== req.identity)) return res.status(403).json({ error: '会话已失效，请重新进入房间。' });
     if (!session) {

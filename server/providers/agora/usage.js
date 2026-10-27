@@ -19,5 +19,5 @@ export async function agoraUsage(env, fetcher = fetch, now = new Date()) {
     }
   }
   const used = seconds / 60;
-  return { status: 'ok', used, remaining: Math.max(0, 10000 - used), total: 10000, unit: '标准分钟', from, to };
+  return { status: 'ok', kind:'usage_estimate', used, remaining: Math.max(0, 10000 - used), total: 10000, unit: '标准分钟', from, to };
 }

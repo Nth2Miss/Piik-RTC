@@ -58,14 +58,14 @@ test('创建房间时空名称使用创建者用户名，编辑时仍需填写�
   assert.equal((await owner('/api/rooms', {name:'x'.repeat(41)})).status, 400);
   assert.equal((await owner('/api/rooms', {name:123})).status, 400);
 });
-test('创建房间拒绝已知余量不足 30 分钟的服务商，未知余量及 30 分钟允许', async t => {
-  const status = { agora:{ status:'ok', remaining:29.99 }, zego:{ status:'unavailable' }, volc:{ status:'unavailable' } };
+test('创建房间拒绝达到 500 分钟保护线的服务商，超过保护线允许', async t => {
+  const status = { agora:{ status:'ok', remaining:500 }, zego:{ status:'unavailable' }, volc:{ status:'unavailable' } };
   const env = { ...credentials, ZEGO_APP_ID:'123456', ZEGO_SERVER_SECRET:'s'.repeat(32) };
   const { owner } = await server(t, env, { usageService:async () => status });
   const blocked = await owner('/api/rooms', { name:'低余量', provider:'agora' });
-  assert.equal(blocked.status, 403); assert.match(blocked.data.error, /不足 30 分钟/);
+  assert.equal(blocked.status, 403); assert.match(blocked.data.error, /500 分钟保护线/);
   assert.equal((await owner('/api/rooms', { name:'未知余量', provider:'zego' })).status, 201);
-  status.agora.remaining = 30;
+  status.agora.remaining = 500.01;
   const boundary = await server(t, env, { usageService:async () => status });
   assert.equal((await boundary.owner('/api/rooms', { name:'边界余量', provider:'agora' })).status, 201);
 });

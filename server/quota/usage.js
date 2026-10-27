@@ -1,9 +1,9 @@
 import { chinaMonth } from '../shared/usage.js';
 import { agoraUsage } from '../providers/agora/usage.js';
-import { volcUsage } from '../providers/volc/usage.js';
+import { volcRtcUsage } from '../providers/volc/usage.js';
 import { createZegoUsage } from '../providers/zego/usage.js';
 
-export function createUsageService(env, fetcher = fetch, now = Date.now) {
+export function createUsageService(env, fetcher = fetch, now = Date.now, store) {
   const seconds = Number(env.RTC_USAGE_CACHE_SECONDS);
   const cacheMs = Number.isInteger(seconds) && seconds >= 1 && seconds <= 86400 ? seconds * 1000 : 300_000;
   const zegoUsage = createZegoUsage(env, fetcher, now);
@@ -14,7 +14,7 @@ export function createUsageService(env, fetcher = fetch, now = Date.now) {
     if (cached && current < expires && cachedMonth === month) return cached;
     if (pending) return pending.then(() => usage());
     const safe = async task => { try { return await task(); } catch { return { status: 'error' }; } };
-    pending = Promise.all([safe(() => agoraUsage(env, fetcher, new Date(current))), safe(() => volcUsage(env, fetcher, new Date(current))), safe(zegoUsage)]).then(([agora, volc, zego]) => {
+    pending = Promise.all([safe(() => agoraUsage(env, fetcher, new Date(current))), safe(() => volcRtcUsage(env, fetcher, new Date(current), store)), safe(zegoUsage)]).then(([agora, volc, zego]) => {
       const updated = now();
       cachedMonth = month;
       expires = updated + cacheMs;
