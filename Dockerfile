@@ -5,7 +5,7 @@ WORKDIR /app
 ENV NODE_OPTIONS=--max-old-space-size=1024
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY index.html tsconfig.json ./
+COPY index.html tsconfig.json vite.config.mjs ./
 COPY public ./public
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
