@@ -19,27 +19,37 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 9.0.x
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Read package version
+        id: version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Check tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          node -e "const p=require('./package.json'); const tag=process.env.GITHUB_REF_NAME; if (tag !== 'v'+p.version) { console.error('Tag '+tag+' does not match package.json v'+p.version); process.exit(1); }"
+          test "$GITHUB_REF_NAME" = "v${{ steps.version.outputs.version }}" || {
+            echo "Tag $GITHUB_REF_NAME does not match package.json v${{ steps.version.outputs.version }}"
+            exit 1
+          }
 
       - name: Build desktop
         env:
@@ -47,16 +57,18 @@ jobs:
         run: npm run desktop:build
 
       - name: Upload desktop artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Piik-RTC-desktop
           path: release/Piik.exe
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Piik-RTC v${{ steps.version.outputs.version }}
           files: release/Piik.exe
           generate_release_notes: true
           fail_on_unmatched_files: true

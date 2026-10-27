@@ -75,7 +75,7 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 
 内嵌地址会写入 exe，首次启动直接连接该服务器，不需要用户填写。用户仍可以在窗口内右键打开菜单，选择“服务器设置…”修改；`--server` 启动参数和 `PIIK_SERVER_URL` 环境变量也会覆盖它。`desktop:build:embed` 必须通过 `--server` 或 `PIIK_DEFAULT_SERVER_URL` 指定地址；构建脚本也接受环境变量 `PIIK_DEFAULT_SERVER_URL`，便于 CI 使用。
 
-版本号取自 `package.json`，构建时写入桌面程序集，并显示在网页帮助页和桌面服务器设置页。发布前先提升版本（例如 `npm version patch --no-git-tag-version`），再推送匹配的 `v<version>` tag；`.github/workflows/desktop.yml` 会构建 exe、上传 artifact 并发布到 GitHub Release。
+版本号取自 `package.json`，构建时写入桌面程序集，并显示在网页帮助页和桌面服务器设置页。发布前先提升版本（例如 `npm version patch --no-git-tag-version`）；推送到 master/main 后，`.github/workflows/desktop.yml` 会构建 exe、上传 artifact，并按该版本创建/更新 GitHub Release。推送匹配的 `v<version>` tag 仍会校验 tag 与版本号一致。
 
 构建流程：
 

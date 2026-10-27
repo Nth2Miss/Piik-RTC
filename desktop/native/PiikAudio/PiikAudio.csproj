@@ -18,5 +18,8 @@
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <!-- WASAPI process loopback uses COM interop and reflection-based JSON in a
+         trimmed single-file helper; these trim warnings are expected and tested. -->
+    <NoWarn>$(NoWarn);IL2026;IL2050;IL2072</NoWarn>
   </PropertyGroup>
 </Project>
