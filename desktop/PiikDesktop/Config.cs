@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Text;
 
 namespace PiikDesktop
@@ -54,12 +56,34 @@ namespace PiikDesktop
                 var env = Environment.GetEnvironmentVariable("PIIK_SERVER_URL");
                 if (!string.IsNullOrWhiteSpace(env)) config.ServerUrl = env.Trim();
             }
+            if (string.IsNullOrWhiteSpace(config.ServerUrl)) config.ServerUrl = EmbeddedDefaultServer();
             if (!string.IsNullOrWhiteSpace(config.ServerUrl))
             {
                 try { config.ServerUrl = new Uri(config.ServerUrl).GetLeftPart(UriPartial.Authority); }
                 catch { config.ServerUrl = ""; }
             }
             return config;
+        }
+
+        /// <summary>
+        /// A server URL baked into the executable at build time:
+        /// dotnet build -p:PiikDefaultServerUrl=https://...
+        /// Saved config and --server / PIIK_SERVER_URL still take precedence.
+        /// </summary>
+        private static string EmbeddedDefaultServer()
+        {
+            try
+            {
+                var attribute = Assembly.GetExecutingAssembly()
+                    .GetCustomAttributes<AssemblyMetadataAttribute>()
+                    .FirstOrDefault(item => string.Equals(item.Key, "PiikDefaultServerUrl", StringComparison.Ordinal));
+                return attribute?.Value?.Trim() ?? "";
+            }
+            catch (Exception exception)
+            {
+                Log.Write("embedded server read failed: " + exception.Message);
+                return "";
+            }
         }
 
         public void Save()

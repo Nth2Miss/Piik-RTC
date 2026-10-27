@@ -13,7 +13,8 @@
 2. 首次启动填写已部署的 Piik-RTC 服务器地址：
    - 生产环境必须使用 `https://`。
    - 本机调试可以使用 `http://localhost:3000`。
-3. 地址保存在 `%LOCALAPPDATA%\PiikDesktop\config.json`；菜单“文件 → 服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。
+   - 如果构建时内嵌了服务端地址，首次启动会直接连接，不再显示这一步。
+3. 地址保存在 `%LOCALAPPDATA%\PiikDesktop\config.json`；菜单“文件 → 服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。优先级：启动参数 > 环境变量 > 已保存配置 > 构建时内嵌地址。
 
 桌面端加载服务器上的网页前端，所以服务端更新后界面也会更新；只有桌面壳或原生采集改动才需要重新发布客户端。
 
@@ -40,7 +41,7 @@ Piik.exe（C# / .NET Framework 4.8 / WinForms / WebView2）
         └─ PCM → 主程序 → WebView2 消息
 ```
 
-渲染端优先使用 Windows Graphics Capture 采集 GPU 画面：BGRA 帧通过 WebView2 共享内存传给前端，直接以 `VideoFrame` 画到隐藏 canvas，再通过 `canvas.captureStream()` 交给 RTC SDK，只编码一次，不再经过 JPEG。选择 1440P/原画或 WGC 不可用时，回退到 GDI+ + JPEG 桥接。音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给 RTC SDK。即构房间的共享画面最高为 1080P，选择 1440P 或原画时会自动按 1080P 采集。
+渲染端优先使用 Windows Graphics Capture 采集 GPU 画面：BGRA 帧通过 WebView2 共享内存传给前端，直接以 `VideoFrame` 画到隐藏 canvas，再通过 `canvas.captureStream()` 交给 RTC SDK，只编码一次，不再经过 JPEG。选择 1440P/原画或 WGC 不可用时，回退到 GDI+ + JPEG 桥接。音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给 RTC SDK。即构房间的共享画面最高为 1080P、码率最高为 10 Mbps，选择 1440P/原画或 12/16 Mbps 时会自动按 1080P / 10 Mbps 采集。
 
 ## 原生采集
 
@@ -63,6 +64,16 @@ npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/P
 npm run desktop:build    # 发布音频组件、压缩嵌入、构建单文件 release/Piik.exe
 npm run desktop:helper   # 只发布 desktop/bin/PiikAudio.exe，便于单独调试音频
 ```
+
+构建时内嵌服务端地址：
+
+```bash
+npm run desktop:build -- --server=https://piik.example.com
+# 或使用专门的命令
+npm run desktop:build:embed -- --server=https://piik.example.com
+```
+
+内嵌地址会写入 exe，首次启动直接连接该服务器，不需要用户填写。用户仍可以通过“文件 → 服务器设置…”修改；`--server` 启动参数和 `PIIK_SERVER_URL` 环境变量也会覆盖它。`desktop:build:embed` 必须通过 `--server` 或 `PIIK_DEFAULT_SERVER_URL` 指定地址；构建脚本也接受环境变量 `PIIK_DEFAULT_SERVER_URL`，便于 CI 使用。
 
 构建流程：
 

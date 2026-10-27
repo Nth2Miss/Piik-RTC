@@ -19,6 +19,9 @@
     <PackageReference Include="Costura.Fody" Version="5.7.0" PrivateAssets="All" />
     <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.28000.2705" />
   </ItemGroup>
+  <ItemGroup Condition="'$(PiikDefaultServerUrl)' != ''">
+    <AssemblyMetadata Include="PiikDefaultServerUrl" Value="$(PiikDefaultServerUrl)" />
+  </ItemGroup>
   <ItemGroup>
     <Reference Include="System.Web.Extensions" />
     <EmbeddedResource Include="Resources\shim.js" LogicalName="Piik.Shim.js" />

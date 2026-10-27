@@ -1,5 +1,5 @@
 import AgoraRTC from 'agora-rtc-sdk-ng';
-import { encoderConfig, type Preferences } from './preferences';
+import { encoderConfig, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import type { RtcProvider } from './types';
 
 type Kind = 'audio' | 'video';
@@ -153,7 +153,7 @@ export class RtcClient {
       // custom stream keeps Zego's own publish defaults.
       const stream = await this.engine.createStream({ custom: {
         source:new MediaStream(raw),
-        ...(preferences ? { bitrate:preferences.bitrate, audioBitrate:128,
+        ...(preferences ? { bitrate:Math.min(preferences.bitrate, ZEGO_MAX_BITRATE), audioBitrate:128,
           videoOptimizationMode:preferences.optimization === 'motion' ? 'motion' : preferences.optimization === 'detail' ? 'detail' : 'default' } : {}),
       } });
       this.zegoLocal = stream;

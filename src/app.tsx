@@ -10,7 +10,7 @@ import { LanguageControl } from './vendor/piik/src/client/components/living/Lang
 import { Glyph, type GlyphName } from './vendor/piik/src/client/ui/icons';
 import { useCopy } from './vendor/piik/src/client/ui/copy';
 import { applyTheme, currentTheme, subscribeTheme } from './vendor/piik/src/client/ui/theme';
-import { defaults, type Preferences } from './preferences';
+import { defaults, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import { inviteUrl, type ConnectionSnapshot, type RoomService, type RoomState } from './room-service';
 import { DesktopCapturePicker } from './desktop/CapturePicker.tsx';
 import { isDesktopApp, type CaptureSelection } from './desktop/bridge.ts';
@@ -255,14 +255,24 @@ function Choices<T extends string | number>({ label, options, value, onChange }:
 }
 function Settings({ state, service, close }: { state:RoomState; service:RoomService; close:() => void }) {
   const isZego = state.room?.provider === 'zego';
-  const [draft, setDraft] = useState<Preferences>(() => isZego && (state.preferences.resolution === '1440' || state.preferences.resolution === 'native') ? { ...state.preferences, resolution:'1080' } : state.preferences);
+  const [draft, setDraft] = useState<Preferences>(() => {
+    const value = state.preferences;
+    return {
+      ...value,
+      ...(isZego && (value.resolution === '1440' || value.resolution === 'native') ? { resolution:'1080' as const } : {}),
+      ...(isZego && value.bitrate > ZEGO_MAX_BITRATE ? { bitrate:ZEGO_MAX_BITRATE } : {}),
+    };
+  });
   const change = (patch:Partial<Preferences>, immediate = false) => { setDraft(previous => ({ ...previous,...patch })); if (immediate) service.savePreferences({ ...state.preferences,...patch }); };
   const presets:[string,Preferences['resolution'],Preferences['fps'],Preferences['bitrate']][] = [['轻量','720',30,3000],['高清','1080',30,5000],['高帧率','1080',60,8000]];
   const presetNodes = <div className="lr-tiles">{presets.map(([title,resolution,fps,bitrate]) => <button type="button" key={title} className={`lr-tile${draft.resolution === resolution && draft.fps === fps && draft.bitrate === bitrate ? ' is-selected' : ''}`} aria-pressed={draft.resolution === resolution && draft.fps === fps && draft.bitrate === bitrate} onClick={() => change({ resolution,fps,bitrate })}><QualityTileGlyph resolution={`${resolution}p`} framerate={fps}/><strong>{title}</strong><small>{resolution}p {fps} 帧</small></button>)}</div>;
   const resolutionOptions = ([['480','480p'],['720','720p'],['1080','1080p'],['1440','1440p'],...(isDesktopApp ? [['native','原画'] as [Preferences['resolution'],string]] : [])] as [Preferences['resolution'],string][]).filter(([value]) => !isZego || (value !== '1440' && value !== 'native'));
+  const bitrateOptions = ([1000,2000,3000,5000,8000,10000,12000,16000] as const)
+    .filter(value => !isZego || value <= ZEGO_MAX_BITRATE)
+    .map(value => [value, `${value/1000} Mbps`] as [Preferences['bitrate'], string]);
   return <Modal title="共享与观看设置" close={close} wide><SharingSettings id="sharing-options" open presets={presetNodes} pictureSummary={<span className="lr-sharing-picture-summary"><span>{draft.resolution === 'native' ? '原画' : `${draft.resolution}p`}</span><span>{draft.fps} fps</span><span>{draft.bitrate/1000} Mbps</span></span>} picture={<>
-    <Choices label="目标分辨率" options={resolutionOptions} value={draft.resolution} onChange={resolution => change({ resolution })}/>{isZego && <p className="sw-settings-note">即构共享画面最高为 1080P。</p>}
-    <div className="lr-sharing-limits"><Choices label="目标帧率" options={([15,24,30,60] as const).map(value => [value,`${value} fps`])} value={draft.fps} onChange={fps => change({ fps })}/><Choices label="最大视频码率" options={([1000,2000,3000,5000,8000,12000,16000] as const).map(value => [value,`${value/1000} Mbps`])} value={draft.bitrate} onChange={bitrate => change({ bitrate })}/></div>
+    <Choices label="目标分辨率" options={resolutionOptions} value={draft.resolution} onChange={resolution => change({ resolution })}/>{isZego && <p className="sw-settings-note">即构共享画面最高为 1080P，码率最高为 10 Mbps。</p>}
+    <div className="lr-sharing-limits"><Choices label="目标帧率" options={([15,24,30,60] as const).map(value => [value,`${value} fps`])} value={draft.fps} onChange={fps => change({ fps })}/><Choices label="最大视频码率" options={bitrateOptions} value={draft.bitrate} onChange={bitrate => change({ bitrate })}/></div>
     <Choices label="弱网优化" options={[["detail","清晰优先"],["balanced","均衡"],["motion","流畅优先"]]} value={draft.optimization} onChange={optimization => change({ optimization })}/>
     <Choices label="观看画面适配" options={[["contain","完整显示"],["cover","填满画面"],["fill","拉伸铺满"]]} value={draft.fit} onChange={fit => change({ fit },true)}/>
   </>} audio={<>

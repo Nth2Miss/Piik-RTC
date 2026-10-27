@@ -3,7 +3,7 @@ import type { ScreenVideoTrackInitConfig, VideoEncoderConfiguration } from 'agor
 export interface Preferences {
   resolution: '480' | '720' | '1080' | '1440' | 'native';
   fps: 15 | 24 | 30 | 60;
-  bitrate: 1000 | 2000 | 3000 | 5000 | 8000 | 12000 | 16000;
+  bitrate: 1000 | 2000 | 3000 | 5000 | 8000 | 10000 | 12000 | 16000;
   optimization: 'detail' | 'motion' | 'balanced';
   audio: boolean;
   filterVoice: boolean;
@@ -14,6 +14,8 @@ export interface Preferences {
   wide: boolean;
 }
 export const defaults: Preferences = { resolution: '1080', fps: 30, bitrate: 3000, optimization: 'detail', audio: true, filterVoice: true, includeSelf: false, volume: 80, muted: false, fit: 'contain', wide: false };
+/** Zego's Web SDK rejects custom-stream bitrates above 10 Mbps. */
+export const ZEGO_MAX_BITRATE = 10000;
 export const presets: Record<string, Partial<Preferences>> = {
   document: { resolution: '1080', fps: 15, bitrate: 3000, optimization: 'detail' },
   movie: { resolution: '1080', fps: 30, bitrate: 5000, optimization: 'motion' },
@@ -25,7 +27,7 @@ export function normalizePreferences(value: unknown): Preferences {
   return {
     resolution: ['480', '720', '1080', '1440', 'native'].includes(String(v.resolution)) ? String(v.resolution) as Preferences['resolution'] : defaults.resolution,
     fps: [15, 24, 30, 60].includes(Number(v.fps)) ? Number(v.fps) as Preferences['fps'] : defaults.fps,
-    bitrate: [1000, 2000, 3000, 5000, 8000, 12000, 16000].includes(Number(v.bitrate)) ? Number(v.bitrate) as Preferences['bitrate'] : defaults.bitrate,
+    bitrate: [1000, 2000, 3000, 5000, 8000, 10000, 12000, 16000].includes(Number(v.bitrate)) ? Number(v.bitrate) as Preferences['bitrate'] : defaults.bitrate,
     optimization: ['detail', 'motion', 'balanced'].includes(String(v.optimization)) ? v.optimization as Preferences['optimization'] : defaults.optimization,
     audio: typeof v.audio === 'boolean' ? v.audio : defaults.audio,
     filterVoice: typeof v.filterVoice === 'boolean' ? v.filterVoice : defaults.filterVoice,

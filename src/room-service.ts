@@ -2,7 +2,7 @@ import AgoraRTC, { type ILocalAudioTrack, type ILocalVideoTrack, type IRemoteVid
 import { captureScreen, type CapturedScreen } from './capture';
 import { captureDesktopScreen } from './desktop/capture.ts';
 import { desktopAudioLabel, type CaptureSelection } from './desktop/bridge.ts';
-import { defaults, normalizePreferences, type Preferences } from './preferences';
+import { defaults, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
 import { usernameError } from './username';
 import type { Participant, Room, RtcProvider } from './types';
@@ -77,10 +77,10 @@ class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 export function errorText(error: unknown) {
-  const e = error as { code?: string; name?: string; message?: string };
+  const e = error as { code?: string; name?: string; message?: string; msg?: string };
   if (e.code === 'PERMISSION_DENIED' || /NotAllowed|cancel|permission denied/i.test(e.message || '')) return '未获得共享权限，请重新选择要分享的画面。';
   if (e.name === 'TimeoutError') return '请求超时，请检查网络或稍后重试。';
-  return e.message || '连接失败，请稍后重试。';
+  return e.message || e.msg || '连接失败，请稍后重试。';
 }
 async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
   const response = await fetch(url, { method: method || (body === undefined ? 'GET' : 'POST'),
@@ -508,11 +508,14 @@ export function createRoomService() {
   async function share(selection?: CaptureSelection) {
     if (!selection && (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia)) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
     const isZego = state.room?.provider === 'zego';
-    // Zego caps screen sharing at 1080P. The desktop picker can offer native
-    // or 1440P, so clamp here as well as in the browser capture path.
-    const sharePreferences = isZego && (state.preferences.resolution === '1440' || state.preferences.resolution === 'native')
-      ? { ...state.preferences, resolution:'1080' as const }
-      : state.preferences;
+    // Zego caps screen sharing at 1080P and 10 Mbps. The desktop picker can
+    // offer native/1440P and the settings can exceed 10 Mbps, so clamp here.
+    const sharePreferences: Preferences = {
+      ...state.preferences,
+      ...(isZego && (state.preferences.resolution === '1440' || state.preferences.resolution === 'native') ? { resolution:'1080' as const } : {}),
+      ...(isZego && state.preferences.bitrate > ZEGO_MAX_BITRATE ? { bitrate:ZEGO_MAX_BITRATE } : {}),
+    };
+    if (isZego && state.preferences.bitrate > ZEGO_MAX_BITRATE) notify(`即构共享码率最高为 ${ZEGO_MAX_BITRATE / 1000} Mbps，已按该码率发送。`);
     // Capture first: getDisplayMedia must run while the click's activation is still valid.
     const next = selection
       ? await captureDesktopScreen(selection, sharePreferences, AgoraRTC, message => notify(message, true))
