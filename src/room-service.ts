@@ -169,12 +169,13 @@ export function createRoomService() {
       room:state.room ? { id:state.room.id, isOwner:state.room.isOwner, members:state.members.length } : undefined,
     };
     if (!state.connected) return snapshot;
+    const watched = typeof state.selected === 'number' ? state.selected : undefined;
     try {
-      const rtc = client.getRTCStats();
-      const quality = client.getNetworkQuality();
+      const rtc = client.getRTCStats(watched);
+      const quality = client.getNetworkQuality(watched);
       snapshot.network = { rtt:Math.round(rtc.RTT || 0), uplinkKbps:Math.round(rtc.OutgoingAvailableBandwidth || 0),
         recvBitrate:Math.round(rtc.RecvBitrate || 0), sendBitrate:Math.round(rtc.SendBitrate || 0),
-        quality:quality.uplinkNetworkQuality };
+        quality:quality.uplinkNetworkQuality || quality.downlinkNetworkQuality };
     } catch { /* stats are unavailable until media connects */ }
     if (tracks.length) {
       try {
@@ -232,10 +233,10 @@ export function createRoomService() {
       },
       preferences:state.preferences,
       media:connectionSnapshot(),
-      rtcStats:state.connected ? attempt(() => client.getRTCStats()) : null,
+      rtcStats:state.connected ? attempt(() => client.getRTCStats(typeof state.selected === 'number' ? state.selected : undefined)) : null,
       localVideoStats:tracks.length ? attempt(() => client.getLocalVideoStats()) : null,
       remoteVideoStats:state.connected ? attempt(() => client.getRemoteVideoStats()) : null,
-      networkQuality:state.connected ? attempt(() => client.getNetworkQuality()) : null,
+      networkQuality:state.connected ? attempt(() => client.getNetworkQuality(typeof state.selected === 'number' ? state.selected : undefined)) : null,
       capture:capture ? { surface:capture.surface, hasAudio:capture.hasAudio,
         tracks:tracks.map(track => ({ kind:track.trackMediaType, enabled:track.enabled })) } : null,
       issues:[...issues],
@@ -515,7 +516,7 @@ export function createRoomService() {
       if (!state.connected) await connectMedia();
       if (ended || !joined || !state.connected) throw new Error('共享已停止，请重新选择。');
       cancelIdleDisconnect();
-      await client.publish(next.tracks);
+      await client.publish(next.tracks, sharePreferences);
       if (ended || !joined) { await client.unpublish(next.tracks).catch(() => {}); throw new Error('共享已停止，请重新选择。'); }
       tracks = next.tracks; capture = next; source.setLocal(state.uid!, video);
       await source.select(state.uid);
@@ -544,7 +545,15 @@ export function createRoomService() {
     if (!joined || renewing) return; renewing = true;
     try {
       const result = await token();
-      if (state.connected) await client.renewToken(result.token);
+      if (!state.connected) return;
+      try { await client.renewToken(result.token); }
+      catch {
+        // A single signaling hiccup should not drop the whole room; retry once
+        // before giving up, the previous token is still valid for a while.
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        if (!joined || !state.connected) return;
+        await client.renewToken(result.token);
+      }
     }
     catch (error) { notify(`续期失败：${errorText(error)}`, true); await leave(); }
     finally { renewing = false; }

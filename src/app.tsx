@@ -245,7 +245,7 @@ function ConnectionDetails({ state, service, close }: { state:RoomState; service
         <dt>网络质量</dt><dd>{qualityLabels[network.quality] || '未知'}</dd>
       </dl> : <p className="sw-connection-empty">连接媒体后显示实时网络统计。</p>}</section>
     </div>
-    <p className="sw-settings-note">连接统计每 2 秒刷新；部分服务商的统计暂不可用。</p>
+    <p className="sw-settings-note">连接统计每 2 秒刷新；远端统计在首次收到画面后约 1–3 秒内出现。</p>
   </div></Modal>;
 }
 function Choices<T extends string | number>({ label, options, value, onChange }: { label:string; options:[T,string][]; value:T; onChange:(value:T) => void }) {

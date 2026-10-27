@@ -12,8 +12,9 @@ import { QuotaMonitor, normalizeMedia, QUOTA_RESERVE_MINUTES } from './quota/mon
 
 const secret = () => randomBytes(24).toString('base64url');
 const hour = 3600;
-// A short media token limits the lifetime of credentials already issued when a room closes.
-const rtcTokenLifetime = 120;
+// A bounded media token limits the lifetime of credentials already issued when a room closes.
+// Ten minutes keeps routine renewals infrequent while still expiring soon after a room closes.
+const rtcTokenLifetime = 600;
 function roomFields(body, defaultName = '') {
   if (body?.name !== undefined && typeof body.name !== 'string') return null;
   const name = (body?.name?.trim() || defaultName);
