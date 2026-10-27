@@ -1,18 +1,21 @@
 {
-  "name": "piik-sw",
+  "name": "piik-rtc",
   "version": "1.0.0",
+  "description": "Piik-RTC：多人屏幕共享与语音客厅，支持声网、即构和火山引擎 RTC。",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node server/index.js",
     "build": "tsc --noEmit && vite build",
     "start": "node server/index.js --production",
-    "test": "node --test server/*.test.js",
+    "test": "node --test server/tests/*.test.js",
     "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:build": "node scripts/build-desktop.mjs",
     "desktop:helper": "dotnet publish desktop/native/PiikAudio/PiikAudio.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=partial -p:DebugType=None -p:DebugSymbols=false -o desktop/bin"
   },
   "dependencies": {
+    "@volcengine/rtc": "^4.69.4",
     "agora-rtc-sdk-ng": "^4.24.0",
     "agora-token": "^2.0.0",
     "dotenv": "^17.2.0",
@@ -21,6 +24,7 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "ws": "^8.22.0",
+    "zego-express-engine-webrtc": "^3.13.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -29,6 +33,5 @@
     "typescript": "^5.9.0",
     "vite": "^7.1.0"
   },
-  "description": "和朋友一起看屏幕的小客厅，支持程序/窗口选择和语音软件过滤。",
   "author": "Piik contributors"
 }

@@ -47,7 +47,7 @@ namespace PiikDesktop
         private static void Fatal(Exception exception)
         {
             Log.Write("fatal: " + exception);
-            try { MessageBox.Show(exception != null ? exception.ToString() : "未知错误", "Piik 桌面端", MessageBoxButtons.OK, MessageBoxIcon.Error); } catch { }
+            try { MessageBox.Show(exception != null ? exception.ToString() : "未知错误", "Piik-RTC 桌面端", MessageBoxButtons.OK, MessageBoxIcon.Error); } catch { }
         }
 
         private static void ExtractAudioHelper()

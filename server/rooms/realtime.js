@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import { normalizeMedia } from '../quota/monitor.js';
 
 const identityPattern = /^[\w-]{32}$/;
 const cookieIdentity = header => header?.split(';').map(part => part.trim())
@@ -20,13 +21,13 @@ export function attachRealtime(server, app, env = process.env) {
     if (closed) return null;
     const room = store.get(client.roomId);
     if (!room) return null;
-    return { type: 'room', participants: app.locals.participants(client.roomId),
+    return { type: 'room', quotaHealthy:app.locals.monitor.healthy(), participants: app.locals.participants(client.roomId),
       room: app.locals.publicRoom(room, client.identity) };
   };
   const sendRoom = (client) => {
     if (closed || !client.roomId) return;
     const payload = roomPayload(client);
-    send(client, payload || { type: 'closed' });
+    send(client, payload || { type: 'closed', reason:store.getAny(client.roomId)?.closeReason || undefined });
   };
   const broadcast = (roomId, force = false) => {
     if (closed || !roomId) return;
@@ -35,7 +36,7 @@ export function attachRealtime(server, app, env = process.env) {
     signatures.set(roomId, signature);
     for (const client of clients) if (client.roomId === roomId) sendRoom(client);
   };
-  app.locals.notifyRoom = roomId => broadcast(roomId);
+  app.locals.notifyRoom = (roomId, force = false) => broadcast(roomId, force);
 
   server.on('upgrade', (request, socket, head) => {
     const path = new URL(request.url, 'http://localhost').pathname;
@@ -60,9 +61,11 @@ export function attachRealtime(server, app, env = process.env) {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
       if (message?.type === 'subscribe' && typeof message.roomId === 'string' && typeof message.sessionKey === 'string') {
+        app.locals.monitor.account();
         const session = sessions.get(message.sessionKey);
         if (!session || session.roomId !== message.roomId || session.userId !== identity || session.expiresAt <= Date.now()) {
-          send(client, { type: 'expired' });
+          const reason = store.getAny(message.roomId)?.closeReason;
+          send(client, reason ? { type:'closed', reason } : { type:'expired' });
           return;
         }
         client.roomId = message.roomId;
@@ -75,10 +78,12 @@ export function attachRealtime(server, app, env = process.env) {
         return;
       }
       if (message?.type === 'presence' && client.roomId) {
+        app.locals.monitor.account();
         const session = sessions.get(client.sessionKey);
         if (!session || session.roomId !== client.roomId || session.userId !== identity) return;
         session.lastSeen = Date.now();
         session.sharing = message.sharing === true;
+        if (message.media && typeof message.media === 'object') session.media = normalizeMedia(message.media);
         store.occupied(client.roomId, Date.now());
         broadcast(client.roomId);
       }
@@ -88,10 +93,12 @@ export function attachRealtime(server, app, env = process.env) {
   // A live socket keeps its session present, so clients no longer need to poll.
   const keepAlive = setInterval(() => {
     const now = Date.now();
+    app.locals.monitor.account(now);
     for (const client of clients) {
       const session = sessions.get(client.sessionKey);
       if (!session || session.userId !== client.identity || session.roomId !== client.roomId) {
-        send(client, { type: 'expired' });
+        const reason = client.roomId && store.getAny(client.roomId)?.closeReason;
+        send(client, reason ? { type:'closed', reason } : { type:'expired' });
         client.roomId = undefined; client.sessionKey = undefined;
         continue;
       }
@@ -102,13 +109,14 @@ export function attachRealtime(server, app, env = process.env) {
       }
       session.lastSeen = now;
       store.occupied(client.roomId, now);
+      if (app.locals.monitor.healthy(now)) send(client, { type:'quota-lease' });
     }
     for (const roomId of new Set([...clients].map(client => client.roomId).filter(Boolean))) {
       if (!store.get(roomId)) {
         signatures.delete(roomId);
         for (const client of clients) {
           if (client.roomId !== roomId) continue;
-          send(client, { type: 'closed' });
+          send(client, { type: 'closed', reason:store.getAny(roomId)?.closeReason || undefined });
           client.roomId = undefined; client.sessionKey = undefined;
         }
       } else {

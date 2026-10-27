@@ -11,6 +11,7 @@ import {
 
 interface Props {
   preferences: Preferences;
+  max1080?: boolean;
   onClose: () => void;
   onConfirm: (selection: CaptureSelection, preferences: Preferences) => void;
 }
@@ -48,9 +49,10 @@ function uniqueApps(apps: DesktopApp[]): DesktopApp[] {
   });
 }
 
-export function DesktopCapturePicker({ preferences, onClose, onConfirm }: Props) {
+export function DesktopCapturePicker({ preferences, max1080 = false, onClose, onConfirm }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const confirmed = useRef(false);
+  const resolutions = useMemo(() => RESOLUTIONS.filter(option => !max1080 || (option.value !== '1440' && option.value !== 'native')), [max1080]);
   const [tab, setTab] = useState<Tab>('window');
   const [data, setData] = useState<DesktopSourceList | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,7 +60,7 @@ export function DesktopCapturePicker({ preferences, onClose, onConfirm }: Props)
   const [selected, setSelected] = useState<Partial<Record<Tab, string>>>({});
   const [resolved, setResolved] = useState<Record<string, ResolvedSource>>({});
   const [resolving, setResolving] = useState<Record<string, boolean>>({});
-  const [resolution, setResolution] = useState<Preferences['resolution']>(preferences.resolution);
+  const [resolution, setResolution] = useState<Preferences['resolution']>(() => max1080 && (preferences.resolution === '1440' || preferences.resolution === 'native') ? '1080' : preferences.resolution);
   const [fps, setFps] = useState<Preferences['fps']>(preferences.fps);
   const [audio, setAudio] = useState(preferences.audio);
   const [filterVoice, setFilterVoice] = useState(preferences.filterVoice);
@@ -248,7 +250,8 @@ export function DesktopCapturePicker({ preferences, onClose, onConfirm }: Props)
       <aside className="dsc-side">
         <section className="dsc-section">
           <strong className="dsc-label">分辨率</strong>
-          <div className="dsc-chips">{RESOLUTIONS.map(option => <button type="button" key={option.value} className={`dsc-chip${resolution === option.value ? ' is-selected' : ''}`} aria-pressed={resolution === option.value} onClick={() => setResolution(option.value)}>{option.label}</button>)}</div>
+          <div className="dsc-chips">{resolutions.map(option => <button type="button" key={option.value} className={`dsc-chip${resolution === option.value ? ' is-selected' : ''}`} aria-pressed={resolution === option.value} onClick={() => setResolution(option.value)}>{option.label}</button>)}</div>
+          {max1080 && <p className="dsc-note">即构共享画面最高为 1080P，已隐藏 1440P 和原画。</p>}
         </section>
 
         <section className="dsc-section">

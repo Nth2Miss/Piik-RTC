@@ -5,7 +5,8 @@ import { desktopAudioLabel, type CaptureSelection } from './desktop/bridge.ts';
 import { defaults, normalizePreferences, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
 import { usernameError } from './username';
-import type { Participant, Room } from './types';
+import type { Participant, Room, RtcProvider } from './types';
+import { RtcClient } from './rtc-client';
 
 export interface RoomState {
   view: 'welcome' | 'lobby' | 'room';
@@ -26,7 +27,9 @@ export interface RoomState {
   connection: string;
   caption: string;
   notice?: { message: string; error: boolean };
+  budgetAlert?: string;
   preferences: Preferences;
+  providers: Record<RtcProvider, boolean>;
 }
 export interface ConnectionSnapshot {
   at: number;
@@ -93,7 +96,7 @@ export const inviteUrl = (room: Room) => `${location.origin}/#room=${room.id}`;
 export function createRoomService() {
   let preferences = { ...defaults }, name = '';
   try { preferences = normalizePreferences(JSON.parse(localStorage.getItem('screen-preferences') || '{}')); name = localStorage.getItem('screen-display-name') || ''; } catch { /* optional storage */ }
-  let state: RoomState = { view:'welcome', name, configured:false, realtime:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences };
+  let state: RoomState = { view:'welcome', name, configured:false, realtime:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences, providers:{ agora:false, zego:false, volc:false, volc2:false } };
   const listeners = new Set<() => void>();
   const issues: { at:string; kind:string; message:string }[] = [];
   const redact = (value: string) => value
@@ -108,7 +111,7 @@ export function createRoomService() {
     const reason = event.reason as { message?: string } | undefined;
     recordIssue('unhandled-rejection', reason?.message || String(event.reason));
   });
-  const client = AgoraRTC.createClient({ mode:'rtc', codec:'vp8' });
+  const client = new RtcClient();
   AgoraRTC.setLogLevel(3);
   let joined = false, confirmed = false, attempt = 0, revision = 0, listRevision = 0;
   let sessionKey: string | undefined;
@@ -127,6 +130,9 @@ export function createRoomService() {
   let mediaLeaving: Promise<void> | undefined;
   let mediaRetryAt = 0;
   let mediaIdle = false;
+  let presenceSignature = '';
+  let quotaLeaseAt = 0;
+  let quotaWatchdogBusy = false;
   function members(): Participant[] {
     if (!joined || state.uid === undefined) return [];
     const known = new Map(participants.map(person => [person.uid, person]));
@@ -142,11 +148,22 @@ export function createRoomService() {
     state = { ...state, ...patch };
     state = { ...state, members:members(), selected:source.selected, sharing:tracks.length > 0 };
     listeners.forEach(listener => listener());
+    if (joined && state.room && sessionKey) {
+      const signature = JSON.stringify(presencePayload());
+      if (signature !== presenceSignature) {
+        presenceSignature = signature;
+        if (!sendPresence()) void heartbeat();
+      }
+    }
   }
   function notify(message: string, error = false) {
     if (error) recordIssue('notice', message);
     clearTimeout(noticeTimer); emit({ notice:{ message, error } });
     noticeTimer = setTimeout(() => emit({ notice:undefined }), 9000);
+  }
+  function notifyClosure(message:string) {
+    if (message.includes('达到 500 分钟保护线')) emit({ budgetAlert:message });
+    else notify(message, true);
   }
   function connectionSnapshot(): ConnectionSnapshot {
     const snapshot: ConnectionSnapshot = {
@@ -154,12 +171,13 @@ export function createRoomService() {
       room:state.room ? { id:state.room.id, isOwner:state.room.isOwner, members:state.members.length } : undefined,
     };
     if (!state.connected) return snapshot;
+    const watched = typeof state.selected === 'number' ? state.selected : undefined;
     try {
-      const rtc = client.getRTCStats();
-      const quality = client.getNetworkQuality();
+      const rtc = client.getRTCStats(watched);
+      const quality = client.getNetworkQuality(watched);
       snapshot.network = { rtt:Math.round(rtc.RTT || 0), uplinkKbps:Math.round(rtc.OutgoingAvailableBandwidth || 0),
         recvBitrate:Math.round(rtc.RecvBitrate || 0), sendBitrate:Math.round(rtc.SendBitrate || 0),
-        quality:quality.uplinkNetworkQuality };
+        quality:quality.uplinkNetworkQuality || quality.downlinkNetworkQuality };
     } catch { /* stats are unavailable until media connects */ }
     if (tracks.length) {
       try {
@@ -201,7 +219,7 @@ export function createRoomService() {
     const navigation = navigator as Navigator & { deviceMemory?: number };
     return {
       capturedAt:new Date().toISOString(),
-      app:{ name:'piik-sw', sdk:AgoraRTC.VERSION, secureContext:window.isSecureContext },
+      app:{ name:'piik-rtc', sdk:state.room?.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${AgoraRTC.VERSION}`, secureContext:window.isSecureContext },
       environment:{
         userAgent:navigator.userAgent, platform:navigator.platform, language:navigator.language,
         languages:[...navigator.languages], hardwareConcurrency:navigator.hardwareConcurrency,
@@ -217,10 +235,10 @@ export function createRoomService() {
       },
       preferences:state.preferences,
       media:connectionSnapshot(),
-      rtcStats:state.connected ? attempt(() => client.getRTCStats()) : null,
+      rtcStats:state.connected ? attempt(() => client.getRTCStats(typeof state.selected === 'number' ? state.selected : undefined)) : null,
       localVideoStats:tracks.length ? attempt(() => client.getLocalVideoStats()) : null,
       remoteVideoStats:state.connected ? attempt(() => client.getRemoteVideoStats()) : null,
-      networkQuality:state.connected ? attempt(() => client.getNetworkQuality()) : null,
+      networkQuality:state.connected ? attempt(() => client.getNetworkQuality(typeof state.selected === 'number' ? state.selected : undefined)) : null,
       capture:capture ? { surface:capture.surface, hasAudio:capture.hasAudio,
         tracks:tracks.map(track => ({ kind:track.trackMediaType, enabled:track.enabled })) } : null,
       issues:[...issues],
@@ -231,12 +249,12 @@ export function createRoomService() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `piik-sw-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    link.download = `piik-rtc-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify('诊断信息已导出，可附在问题反馈中。');
   }
-  const source = new SourceController({ client,
+  const source = new SourceController({ client: client as any,
     remote:uid => client.remoteUsers.find(user => user.uid === uid),
     video:video => emit({ video }), empty:() => emit({ video:undefined }),
     error:error => notify(`切换画面失败：${errorText(error)}`, true),
@@ -272,7 +290,7 @@ export function createRoomService() {
   }
   function scheduleHeartbeat() {
     clearInterval(heartbeatTimer); heartbeatTimer = undefined;
-    if (!joined || document.hidden || socket?.readyState === WebSocket.OPEN) return;
+    if (!joined || socket?.readyState === WebSocket.OPEN) return;
     heartbeatTimer = setInterval(() => {
       if (socket?.readyState === WebSocket.OPEN) { clearInterval(heartbeatTimer); heartbeatTimer = undefined; return; }
       void heartbeat();
@@ -289,13 +307,23 @@ export function createRoomService() {
       scheduleIdleDisconnect();
     }
   }
+  function presencePayload() {
+    const dimensions = (track:any) => {
+      try { const settings = track?.getMediaStreamTrack?.().getSettings(); return { width:settings?.width || 0, height:settings?.height || 0 }; }
+      catch { return { width:0, height:0 }; }
+    };
+    const receive = dimensions(state.video), publish = dimensions(tracks.find(track => track.trackMediaType === 'video'));
+    // Keep accounting during reconnection while a published or selected stream may still be billed.
+    return { sharing:tracks.length > 0, media:{ connected:state.connected || state.connecting || tracks.length > 0 || source.selected !== undefined, selected:typeof source.selected === 'number' ? source.selected : undefined,
+      width:receive.width, height:receive.height, publishWidth:publish.width, publishHeight:publish.height, pulls:client.zegoPulls } };
+  }
   function sendPresence() {
     if (!socket || socket.readyState !== WebSocket.OPEN || !state.room) return false;
-    socket.send(JSON.stringify({ type:'presence', sharing: tracks.length > 0 }));
+    socket.send(JSON.stringify({ type:'presence', ...presencePayload() }));
     return true;
   }
   function openSocket() {
-    if (!state.realtime || !joined || !state.room || !sessionKey || socket || document.hidden) return;
+    if (!state.realtime || !joined || !state.room || !sessionKey || socket) return;
     const roomId = state.room.id;
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     socket = ws;
@@ -303,19 +331,22 @@ export function createRoomService() {
       if (ws !== socket) { ws.close(); return; }
       socketDelay = 1000;
       clearInterval(heartbeatTimer); heartbeatTimer = undefined;
-      if (joined && sessionKey) ws.send(JSON.stringify({ type:'subscribe', roomId, sessionKey }));
+      if (joined && sessionKey) { ws.send(JSON.stringify({ type:'subscribe', roomId, sessionKey })); sendPresence(); }
     };
     ws.onmessage = event => {
       if (ws !== socket) return;
-      let message: { type?: string; participants?: Participant[]; room?: Room };
+      let message: { type?: string; participants?: Participant[]; room?: Room; reason?:string; quotaHealthy?:boolean };
       try { message = JSON.parse(String(event.data)); } catch { return; }
       if (message.type === 'room' && message.room?.id === state.room?.id && Array.isArray(message.participants)) {
+        if (message.quotaHealthy) quotaLeaseAt = Date.now();
         participants = message.participants;
         emit({ room:message.room });
         reactToParticipants(message.participants);
+      } else if (message.type === 'quota-lease') {
+        quotaLeaseAt = Date.now();
       } else if (message.type === 'closed') {
         closeSocket();
-        notify('房间已关闭，请选择其他房间。', true);
+        notifyClosure(message.reason || '房间已关闭，请选择其他房间。');
         void leave().then(() => refreshRooms());
       } else if (message.type === 'expired') {
         closeSocket();
@@ -325,7 +356,7 @@ export function createRoomService() {
     };
     ws.onclose = () => {
       if (socket === ws) socket = undefined;
-      if (!joined || document.hidden) return;
+      if (!joined) return;
       scheduleHeartbeat();
       if (socketRetry) return;
       socketRetry = setTimeout(() => { socketRetry = undefined; openSocket(); }, socketDelay);
@@ -344,13 +375,14 @@ export function createRoomService() {
     const id = state.room.id, key = sessionKey, version = revision;
     heartbeatPending = true;
     try {
-      const result = await api<{ participants:Participant[]; room:Room }>(`/api/rooms/${id}/presence`, { sessionKey:key, sharing:tracks.length > 0 });
+      const result = await api<{ participants:Participant[]; room:Room; quotaHealthy:boolean }>(`/api/rooms/${id}/presence`, { sessionKey:key, ...presencePayload() });
       if (version !== revision || key !== sessionKey) return;
+      if (result.quotaHealthy) quotaLeaseAt = Date.now();
       participants = result.participants; emit({ room:result.room });
       reactToParticipants(result.participants);
     } catch (error) {
       if (version === revision && key === sessionKey && error instanceof ApiError && [403,404].includes(error.status)) {
-        notify(errorText(error), true); await leave(); await refreshRooms();
+        notifyClosure(errorText(error)); await leave(); await refreshRooms();
       }
     } finally { heartbeatPending = false; }
   }
@@ -391,7 +423,7 @@ export function createRoomService() {
         const result = await token();
         if (current !== attempt || !joined) return;
         await Promise.race([client.join(result.appId, state.room!.id, result.token, result.uid), new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('声网连接超时，请检查网络后重试。')), 25000);
+          timer = setTimeout(() => reject(new Error('媒体连接超时，请检查网络后重试。')), 25000);
         })]);
         if (current !== attempt || !joined) return;
         cancelIdleDisconnect(); mediaRetryAt = 0;
@@ -428,7 +460,7 @@ export function createRoomService() {
     cancelIdleDisconnect();
     try { await client.leave(); }
     finally {
-      joined = false; participants = []; sessionKey = undefined;
+      joined = false; participants = []; sessionKey = undefined; presenceSignature = ''; quotaLeaseAt = 0;
       if (room && key) await api(`/api/rooms/${room.id}/leave`, { sessionKey:key }).catch(() => {});
       history.replaceState(null, '', '/');
       emit({ view:'lobby', room:undefined, uid:undefined, video:undefined, connected:false, connecting:false });
@@ -437,9 +469,10 @@ export function createRoomService() {
   async function enter(room: Room) {
     if (!confirmed || (joined && state.room?.id === room.id)) return;
     if (joined) await leave();
+    await client.setProvider(room.provider || 'agora');
     emit({ room });
     try {
-      await token(); joined = true; revision++; participants = []; mediaIdle = true;
+      await token(); joined = true; revision++; participants = []; mediaIdle = true; quotaLeaseAt = Date.now();
       emit({ view:'room', connection:'等待共享', caption:'选择成员可切换观看，你自己的共享会继续。' });
       history.replaceState(null, '', `/#room=${room.id}`);
       await heartbeat();
@@ -454,7 +487,11 @@ export function createRoomService() {
     const result = await api<{ rooms:Room[] }>('/api/rooms');
     if (current !== listRevision) return;
     const active = result.rooms.find(room => room.id === state.room?.id);
-    if (state.room && !active && !state.busy) { await leave(); notify('房间已关闭，请选择其他房间。'); }
+    if (state.room && !active && !state.busy) {
+      let reason = '房间已关闭，请选择其他房间。';
+      try { await api<Room>(`/api/rooms/${state.room.id}`); } catch (error) { reason = errorText(error); }
+      await leave(); notifyClosure(reason);
+    }
     emit({ rooms:result.rooms, ...(active ? { room:active } : {}) });
   }
   async function confirm(value: string) {
@@ -470,10 +507,16 @@ export function createRoomService() {
   }
   async function share(selection?: CaptureSelection) {
     if (!selection && (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia)) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
+    const isZego = state.room?.provider === 'zego';
+    // Zego caps screen sharing at 1080P. The desktop picker can offer native
+    // or 1440P, so clamp here as well as in the browser capture path.
+    const sharePreferences = isZego && (state.preferences.resolution === '1440' || state.preferences.resolution === 'native')
+      ? { ...state.preferences, resolution:'1080' as const }
+      : state.preferences;
     // Capture first: getDisplayMedia must run while the click's activation is still valid.
     const next = selection
-      ? await captureDesktopScreen(selection, state.preferences, AgoraRTC, message => notify(message, true))
-      : await captureScreen(state.preferences, AgoraRTC);
+      ? await captureDesktopScreen(selection, sharePreferences, AgoraRTC, message => notify(message, true))
+      : await captureScreen(sharePreferences, AgoraRTC, undefined, undefined, isZego);
     const video = next.tracks[0] as ILocalVideoTrack;
     let ended = false;
     next.onEnded(() => { ended = true; if (tracks.includes(video)) void stop(); });
@@ -481,38 +524,46 @@ export function createRoomService() {
       if (!state.connected) await connectMedia();
       if (ended || !joined || !state.connected) throw new Error('共享已停止，请重新选择。');
       cancelIdleDisconnect();
-      await client.publish(next.tracks);
+      await client.publish(next.tracks, sharePreferences);
       if (ended || !joined) { await client.unpublish(next.tracks).catch(() => {}); throw new Error('共享已停止，请重新选择。'); }
       tracks = next.tracks; capture = next; source.setLocal(state.uid!, video);
       await source.select(state.uid);
-      const audio = selection
-        ? desktopAudioLabel(selection, next.hasAudio)
-        : next.surface === 'monitor' ? '系统' : next.surface === 'window' ? '窗口' : '标签页';
-      const resolution = state.preferences.resolution === 'native' ? '原画' : `${state.preferences.resolution}p`;
-      emit({ caption:`${resolution} · ${state.preferences.fps} fps · ${next.hasAudio ? audio : '仅画面'}，切换观看会保留你的共享。` });
-      if (!selection && state.preferences.audio && !next.hasAudio) notify(`未获得${audio}音轨，本次仅共享画面。请在浏览器选择器中勾选共享音频。`);
+      const sourceAudio = next.surface === 'monitor' ? '系统' : next.surface === 'window' ? '窗口' : '标签页';
+      const audioLabel = selection ? desktopAudioLabel(selection, next.hasAudio) : next.hasAudio ? `含${sourceAudio}音频` : '仅画面';
+      const resolution = sharePreferences.resolution === 'native' ? '原画' : `${sharePreferences.resolution}p`;
+      emit({ caption:`${resolution} · ${sharePreferences.fps} fps · ${audioLabel}，切换观看会保留你的共享。` });
+      if (!selection && state.preferences.audio && !next.hasAudio) notify(`未获得${sourceAudio}音轨，本次仅共享画面。请在浏览器选择器中勾选共享音频。`);
       void heartbeat();
     } catch (error) { next.close(); throw error; }
   }
-  client.on('connection-state-change', connection => {
-    emit({ connection:({ CONNECTED:'声网已连接', CONNECTING:'正在连接声网…', RECONNECTING:'正在重连…', DISCONNECTING:'正在断开…', DISCONNECTED: mediaIdle ? '等待共享' : '媒体未连接' })[connection], ...(connection === 'DISCONNECTED' ? { connected:false } : {}) });
+  client.on('connection-state-change', (connection:string) => {
+    emit({ connection:({ CONNECTED:'媒体已连接', CONNECTING:'正在连接媒体…', RECONNECTING:'正在重连…', DISCONNECTING:'正在断开…', DISCONNECTED: mediaIdle ? '等待共享' : '媒体未连接' } as Record<string,string>)[connection], ...(connection === 'DISCONNECTED' ? { connected:false } : connection === 'CONNECTED' ? { connected:true } : {}) });
   });
   client.on('user-joined', () => { emit(); void heartbeat(); });
-  client.on('user-published', (user, kind) => {
+  client.on('billing-change', () => emit());
+  client.on('user-published', (user:any, kind:string) => {
     if (kind !== 'video' && kind !== 'audio') return;
     if (source.selected === user.uid || (kind === 'video' && source.selected === undefined)) void select(user.uid);
     emit(); void heartbeat();
   });
-  client.on('user-unpublished', (user, kind) => {
+  client.on('user-unpublished', (user:any, kind:string) => {
     if (source.selected === user.uid) { if (kind === 'video') fallback(); else void select(user.uid); }
     emit();
   });
-  client.on('user-left', user => { if (source.selected === user.uid) fallback(); emit(); void heartbeat(); });
+  client.on('user-left', (user:any) => { if (source.selected === user.uid) fallback(); emit(); void heartbeat(); });
   async function renew() {
     if (!joined || renewing) return; renewing = true;
     try {
       const result = await token();
-      if (state.connected) await client.renewToken(result.token);
+      if (!state.connected) return;
+      try { await client.renewToken(result.token); }
+      catch {
+        // A single signaling hiccup should not drop the whole room; retry once
+        // before giving up, the previous token is still valid for a while.
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        if (!joined || !state.connected) return;
+        await client.renewToken(result.token);
+      }
     }
     catch (error) { notify(`续期失败：${errorText(error)}`, true); await leave(); }
     finally { renewing = false; }
@@ -521,14 +572,33 @@ export function createRoomService() {
   client.on('token-privilege-did-expire', () => void renew());
   AgoraRTC.onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
   const listTimer = setInterval(() => { if (confirmed && !state.busy && !document.hidden) void refreshRooms().catch(() => {}); }, 30000);
+  // Stream tracks and their received resolution may change without a UI event.
+  const mediaReport = setInterval(() => {
+    if (!joined || !state.room || !sessionKey || state.room.provider !== 'zego') return;
+    const signature = JSON.stringify(presencePayload());
+    if (signature !== presenceSignature) {
+      presenceSignature = signature;
+      if (!sendPresence()) void heartbeat();
+    }
+  }, 10000);
+  const quotaWatchdog = setInterval(() => {
+    if (!joined || !(state.connected || state.connecting || tracks.length || source.selected !== undefined) || quotaWatchdogBusy || !quotaLeaseAt || Date.now() - quotaLeaseAt <= 60000) return;
+    quotaWatchdogBusy = true;
+    void (async () => {
+      attempt++; cancelIdleDisconnect(); mediaIdle = true;
+      await stop(false); await source.select(undefined); await client.leave().catch(() => {});
+      emit({ connected:false, connecting:false, video:undefined, connection:'监控连接中断' });
+      notify('余量监控连接中断，已停止媒体连接，请检查网络后重新开始共享。', true);
+    })().finally(() => { quotaWatchdogBusy = false; });
+  }, 15000);
   document.addEventListener('visibilitychange', () => {
     if (!joined) return;
-    if (document.hidden) { clearInterval(heartbeatTimer); heartbeatTimer = undefined; closeSocket(); return; }
+    if (document.hidden) { scheduleHeartbeat(); return; }
     openSocket(); void heartbeat(); scheduleHeartbeat();
   });
   window.addEventListener('pagehide', () => {
     closeSocket();
-    clearInterval(listTimer); clearInterval(heartbeatTimer); clearTimeout(idleTimer); capture?.close();
+    clearInterval(listTimer); clearInterval(mediaReport); clearInterval(quotaWatchdog); clearInterval(heartbeatTimer); clearTimeout(idleTimer); capture?.close();
     if (state.room && sessionKey) navigator.sendBeacon(`/api/rooms/${state.room.id}/leave`, new Blob([JSON.stringify({ sessionKey })], { type:'application/json' }));
     void client.leave();
   });
@@ -539,11 +609,11 @@ export function createRoomService() {
       let saved = name;
       try {
         const [config, profile] = await Promise.all([
-          api<{configured:boolean; realtime?:boolean}>('/api/config'),
+          api<{configured:boolean; realtime?:boolean; providers:RoomState['providers']}>('/api/config'),
           api<{name:string|null}>('/api/profile'),
         ]);
         saved = profile.name || saved;
-        emit({ configured:config.configured, realtime:config.realtime === true, name:saved });
+        emit({ configured:config.configured, realtime:config.realtime === true, providers:config.providers, name:saved });
       }
       catch (error) { notify(errorText(error), true); }
       finally { emit({ ready:true }); }
@@ -565,7 +635,7 @@ export function createRoomService() {
       if (url.origin !== location.origin || !/^[a-f0-9]{12}$/.test(id || '')) throw new Error('请使用本站生成的完整邀请链接。');
       await enter(await api<Room>(`/api/rooms/${id}`));
     }),
-    saveRoom:(fields:{name:string;description:string}, room?:Room) => run(async () => {
+    saveRoom:(fields:{name:string;description:string;provider?:RtcProvider}, room?:Room) => run(async () => {
       const saved = await api<Room>(room ? `/api/rooms/${room.id}` : '/api/rooms', fields, room ? 'PATCH' : 'POST');
       if (room) emit({ room:saved }); else await enter(saved);
       await refreshRooms();
@@ -590,6 +660,7 @@ export function createRoomService() {
       catch { notify('无法自动复制，请从房间信息中手动复制邀请链接。', true); }
     },
     dismissNotice:() => emit({ notice:undefined }),
+    dismissBudgetAlert:() => emit({ budgetAlert:undefined }),
     getConnectionSnapshot: connectionSnapshot,
     exportDiagnostics,
   };

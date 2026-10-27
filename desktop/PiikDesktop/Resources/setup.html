@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>连接 Piik 服务器</title>
+  <title>连接 Piik-RTC 服务器</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -113,8 +113,8 @@
 <body>
   <main class="card">
     <div class="mark">P</div>
-    <h1>连接 Piik 服务器</h1>
-    <p class="lead">桌面端需要连接一个已部署的 Piik 服务。程序、窗口和声音采集都在本机完成。</p>
+    <h1>连接 Piik-RTC 服务器</h1>
+    <p class="lead">桌面端需要连接一个已部署的 Piik-RTC 服务。程序、窗口和声音采集都在本机完成。</p>
     <form id="form">
       <label for="server">服务器地址</label>
       <input id="server" name="server" type="url" placeholder="https://piik.example.com" autocomplete="url" spellcheck="false" required/>
@@ -125,7 +125,7 @@
       <p class="error" id="error" hidden></p>
     </form>
     <p class="hint">支持 <code>https://</code> 地址；本机调试可以使用 <code>http://localhost:3000</code>。邀请链接和房间数据来自同一台服务器。</p>
-    <footer class="footer"><span id="version"></span><span>Piik 桌面端</span></footer>
+    <footer class="footer"><span id="version"></span><span>Piik-RTC 桌面端</span></footer>
   </main>
   <script>
     const params = new URLSearchParams(location.search);

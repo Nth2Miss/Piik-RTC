@@ -35,7 +35,7 @@ namespace PiikDesktop
             _browserArguments = "--autoplay-policy=no-user-gesture-required";
             if (debug) _browserArguments += " --remote-debugging-port=9222 --remote-allow-origins=*";
 
-            Text = "Piik";
+            Text = "Piik-RTC";
             MinimumSize = new Size(980, 640);
             BackColor = Color.FromArgb(243, 245, 248);
             StartPosition = FormStartPosition.Manual;
@@ -158,7 +158,7 @@ namespace PiikDesktop
                 core.DownloadStarting += DownloadStarting;
                 core.DocumentTitleChanged += (_, __) =>
                 {
-                    Text = _showingSetup ? "Piik 桌面端" : (string.IsNullOrWhiteSpace(core.DocumentTitle) ? "Piik" : core.DocumentTitle);
+                    Text = _showingSetup ? "Piik-RTC 桌面端" : (string.IsNullOrWhiteSpace(core.DocumentTitle) ? "Piik-RTC" : core.DocumentTitle);
                 };
                 core.ProcessFailed += (_, eventArgs) => Log.Write("webview process failed: " + eventArgs.ProcessFailedKind);
 
@@ -169,7 +169,7 @@ namespace PiikDesktop
             {
                 Log.Write("webview init failed: " + exception);
                 MessageBox.Show("无法启动 WebView2。请确认已安装 Microsoft Edge WebView2 运行时。\n\n" + exception.Message,
-                    "Piik 桌面端", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    "Piik-RTC 桌面端", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Close();
             }
         }
@@ -205,7 +205,7 @@ namespace PiikDesktop
             if (_webView == null || _webView.CoreWebView2 == null) return;
             try { _bridge?.StopAll(); } catch { }
             _showingSetup = true;
-            Text = "Piik 桌面端";
+            Text = "Piik-RTC 桌面端";
             var version = Assembly.GetEntryAssembly() != null ? Assembly.GetEntryAssembly().GetName().Version.ToString(3) : "1.0.0";
             var url = "https://piik.setup/setup.html?url=" + Uri.EscapeDataString(_config.ServerUrl ?? "")
                 + "&error=" + Uri.EscapeDataString(error ?? "")

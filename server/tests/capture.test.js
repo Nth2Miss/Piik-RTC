@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { captureScreen, displayOptions, knownWindowAudioSupport } from '../src/capture.ts';
-import { defaults, normalizePreferences } from '../src/preferences.ts';
+import { captureScreen, displayOptions, knownWindowAudioSupport } from '../../src/capture.ts';
+import { defaults, normalizePreferences } from '../../src/preferences.ts';
 
 function fakeCapture(surface, hasAudio = true) {
   const rawVideo = Object.assign(new EventTarget(), { readyState: 'live', stopped: false,
@@ -80,6 +80,21 @@ test('capture initialization failure releases native tracks', async () => {
   fake.sdk.createCustomAudioTrack = () => { throw new Error('audio init failed'); };
   await assert.rejects(captureScreen(defaults, fake.sdk, async () => fake.stream, true), /audio init failed/);
   assert.equal(fake.rawVideo.stopped, true); assert.equal(fake.rawAudio.stopped, true);
+});
+test('即构采集限制 1080P，并在无法保证分辨率时释放轨道', async () => {
+  const fake = fakeCapture('monitor');
+  let constraints;
+  fake.rawVideo.applyConstraints = async value => { constraints = value; };
+  fake.rawVideo.getSettings = () => ({ displaySurface:'monitor', width:1920, height:1080 });
+  const captured = await captureScreen(defaults, fake.sdk, async () => fake.stream, true, true);
+  assert.deepEqual(constraints, {width:{max:1920},height:{max:1080}});
+  captured.close();
+  const oversized = fakeCapture('monitor');
+  oversized.rawVideo.applyConstraints = async () => {};
+  oversized.rawVideo.getSettings = () => ({displaySurface:'monitor',width:2560,height:1440});
+  await assert.rejects(captureScreen(defaults, oversized.sdk, async () => oversized.stream, true, true), /1080P/);
+  assert.equal(oversized.rawVideo.stopped, true);
+  assert.equal(oversized.rawAudio.stopped, true);
 });
 test('older window capture cannot accidentally publish system loopback audio', async () => {
   assert.equal(knownWindowAudioSupport('Mozilla/5.0 Chrome/140.0.0.0'), false);

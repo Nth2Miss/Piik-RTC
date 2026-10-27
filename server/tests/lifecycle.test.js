@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomStore } from './room-store.js';
-import { RoomLifecycle, PRESENCE_LIFETIME, EMPTY_ROOM_TIMEOUT } from './room-lifecycle.js';
+import { RoomStore } from '../rooms/store.js';
+import { RoomLifecycle, PRESENCE_LIFETIME, EMPTY_ROOM_TIMEOUT } from '../rooms/lifecycle.js';
 
 test('abrupt disconnect starts vacancy at the heartbeat deadline, not at the next sweep', () => {
   const store = new RoomStore();

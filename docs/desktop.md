@@ -1,8 +1,8 @@
-# Piik 桌面端
+# Piik-RTC 桌面端
 
 桌面端是一个 **单文件、免安装** 的 Windows 程序（约 6.4 MB），不是网页套壳：
 
-- 使用系统自带的 Microsoft Edge WebView2 加载现有 React 界面和声网 RTC Web SDK。
+- 使用系统自带的 Microsoft Edge WebView2 加载现有 React 界面和声网、即构、火山引擎 RTC Web SDK。
 - C# 主程序负责窗口枚举、缩略图、画面采集和 IPC，不引入 Electron/Chromium 运行时。
 - 内置一个自包含的 .NET 9 音频组件，使用 Windows 进程回环采集声音；发行时压缩嵌入主程序，运行时释放。
 - 自定义“程序 / 屏幕”选择器，支持只共享某个程序的声音，以及共享系统声音时过滤 Oopz / KOOK / Discord 等语音软件。
@@ -10,7 +10,7 @@
 ## 使用方式
 
 1. 运行 `release/Piik.exe`。单文件，不需要安装。
-2. 首次启动填写已部署的 Piik 服务器地址：
+2. 首次启动填写已部署的 Piik-RTC 服务器地址：
    - 生产环境必须使用 `https://`。
    - 本机调试可以使用 `http://localhost:3000`。
 3. 地址保存在 `%LOCALAPPDATA%\PiikDesktop\config.json`；菜单“文件 → 服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。
@@ -38,7 +38,7 @@ Piik.exe（C# / .NET Framework 4.8 / WinForms / WebView2）
         └─ PCM → 主程序 → WebView2 消息
 ```
 
-渲染端把 JPEG 帧画到隐藏 canvas，再通过 `canvas.captureStream()` 得到视频轨，交给声网 SDK 发布；音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给声网。
+渲染端把 JPEG 帧画到隐藏 canvas，再通过 `canvas.captureStream()` 得到视频轨，交给当前房间的 RTC SDK 发布；音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给 RTC SDK。即构房间的共享画面最高为 1080P，选择 1440P 或原画时会自动按 1080P 采集。
 
 ## 原生采集
 
