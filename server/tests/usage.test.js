@@ -136,6 +136,22 @@ test('火山查询接入缓存，错误不影响声网状态', async () => {
   assert.equal(calls, 2);
 });
 
+test('两个火山应用共用访问密钥、分别查询和汇总用量', async t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  const env = {VOLC_RTC_APP_ID:'first-app', VOLC_RTC_APP_ID_2:'second-app', VOLC_ACCESS_KEY_ID:'id', VOLC_ACCESS_KEY_SECRET:'secret'};
+  const requests = [];
+  const service = createUsageService(env, async (url, options) => {
+    const payload = JSON.parse(options.body); requests.push({app:payload.AppId, at:Date.now(), authorization:options.headers.Authorization});
+    return response({Result:{Usages:[{TimeStamp:'2026-10-01T00:00:00+08:00',Audio:payload.AppId === 'first-app' ? 100 : 250}]}});
+  }, () => Date.parse('2026-10-27T00:00:00Z'), store);
+  const status = await service();
+  assert.equal(status.volc.used, 100); assert.equal(status.volc.remaining, 9900);
+  assert.equal(status.volc2.used, 250); assert.equal(status.volc2.remaining, 9750);
+  assert.deepEqual(requests.map(r => r.app), ['first-app','second-app']);
+  assert.ok(requests[1].at - requests[0].at >= 500);
+  assert.ok(requests.every(r => r.authorization.startsWith('HMAC-SHA256 Credential=id/')));
+});
+
 test('用量查询合并并发请求，缓存到期或跨月后重新查询', async () => {
   let now = Date.parse('2026-10-31T15:59:00Z'), calls = 0;
   const service = createUsageService({ ...agoraEnv, RTC_USAGE_CACHE_SECONDS:'300' }, async () => { calls++; return response({ usages:[{ usage:row }] }); }, () => now);

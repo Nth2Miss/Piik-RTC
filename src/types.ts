@@ -1,6 +1,7 @@
+export type RtcProvider = 'agora' | 'zego' | 'volc' | 'volc2';
 export interface Room {
   id: string;
-  provider?: 'agora' | 'zego' | 'volc';
+  provider?: RtcProvider;
   name: string;
   description: string;
   inviteKey: string;

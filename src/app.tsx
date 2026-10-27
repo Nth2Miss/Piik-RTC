@@ -13,12 +13,12 @@ import { applyTheme, currentTheme, subscribeTheme } from './vendor/piik/src/clie
 import { defaults, type Preferences } from './preferences';
 import { inviteUrl, type ConnectionSnapshot, type RoomService, type RoomState } from './room-service';
 import { usernameError } from './username';
-import type { Room } from './types';
+import type { Room, RtcProvider } from './types';
 
 type Usage = { status:string; total?:number; used?:number; remaining?:number; unit?:string; from?:string; to?:string; packages?:number; estimated?:boolean; localUsed?:number; basis?:string; supplier?:Usage; kind?:string; queriedFrom?:string; missingDays?:string[]; delayHours?:number };
-type ServiceStatus = { agora:Usage; volc:Usage; zego:Usage; updatedAt:string; cacheSeconds:number };
-const providerNames = { agora:'声网', zego:'即构 ZEGO', volc:'火山引擎' } as const;
-const providerKeys = ['agora','zego','volc'] as const;
+type ServiceStatus = Record<RtcProvider, Usage> & { updatedAt:string; cacheSeconds:number };
+const providerNames = { agora:'声网', zego:'即构 ZEGO', volc:'火山引擎 1', volc2:'火山引擎 2' } as const;
+const providerKeys:readonly RtcProvider[] = ['agora','zego','volc','volc2'];
 const lowBalance = (usage?:Usage) => usage?.status === 'ok' && typeof usage.remaining === 'number' && Number.isFinite(usage.remaining) && usage.remaining <= 500;
 const formatAmount = (value?:number) => value === undefined ? '—' : (value <= 500 ? Math.floor(value * 100) / 100 : value).toLocaleString('zh-CN', { maximumFractionDigits:2 });
 const usageMessage = (usage?:Usage) => !usage ? '正在查询…' : usage.status === 'unconfigured' ? '尚未配置查询凭据' : usage.status === 'auth_expired' ? '控制台登录已失效，请更新 Cookie' : usage.status === 'forbidden' ? '缺少火山 RTC 用量查询权限（rtc:ListUsages）' : usage.status === 'unavailable' ? '余量查询暂未接入' : '查询失败或数据无法换算';
@@ -123,7 +123,7 @@ function Lobby({ state, service, create, join, remove }: { state:RoomState; serv
   return <main className="lr-room sw-lobby"><header className="sw-lobby-heading"><div><h1>来客厅坐坐。</h1><p>挑一个房间，和大家一起看、一起分享。</p></div><Action icon="plus" primary onClick={create} disabled={state.busy || !state.configured}>创建房间</Action></header>
     {!state.configured && <div className="lr-notice is-bad"><span className="lr-pill"><Glyph name="alert"/>尚未配置 RTC 服务，请填写服务端 .env 后重启。</span></div>}
     <Row><label className="lr-input sw-search"><Glyph name="eye"/><input type="search" placeholder="搜索房间" aria-label="搜索房间" value={query} onChange={event => setQuery(event.target.value)}/></label><span className="sw-count">{state.rooms.length} 个开放房间</span><span className="lr-spacer"/><Action icon="refresh" onClick={() => void service.refresh()} disabled={state.busy}>刷新</Action><Action icon="link" onClick={join} disabled={state.busy}>使用邀请链接</Action></Row>
-    <div className="lr-viewer-overview-scroll sw-room-list" role="list" aria-label="开放房间">{rooms.map(room => <article key={room.id} className="sw-room-row" role="listitem"><button className="sw-room-enter" disabled={state.busy} onClick={() => void service.join(room)} aria-label={`进入房间：${room.name}`}><span className="sw-room-icon"><RoomGlyph/></span><span className="sw-room-copy"><strong>{room.name}</strong><span>{({agora:'声网',zego:'即构',volc:'火山'} as const)[room.provider || 'agora']} · {room.description || '欢迎加入，一起分享屏幕。'}</span></span><span className="sw-room-presence">{room.onlineCount ? `${room.onlineCount} 人在线` : `空房间 · ${Math.max(1, Math.ceil(((room.closesAt || Date.now()) - Date.now()) / 60000))} 分钟后关闭`}</span><Glyph name="arrowRight"/></button>{room.isOwner && <button className="lr-btn is-dense is-quiet" onClick={() => remove(room)} disabled={state.busy} aria-label={`关闭房间：${room.name}`}><Glyph name="x"/></button>}</article>)}
+    <div className="lr-viewer-overview-scroll sw-room-list" role="list" aria-label="开放房间">{rooms.map(room => <article key={room.id} className="sw-room-row" role="listitem"><button className="sw-room-enter" disabled={state.busy} onClick={() => void service.join(room)} aria-label={`进入房间：${room.name}`}><span className="sw-room-icon"><RoomGlyph/></span><span className="sw-room-copy"><strong>{room.name}</strong><span>{providerNames[room.provider || 'agora']} · {room.description || '欢迎加入，一起分享屏幕。'}</span></span><span className="sw-room-presence">{room.onlineCount ? `${room.onlineCount} 人在线` : `空房间 · ${Math.max(1, Math.ceil(((room.closesAt || Date.now()) - Date.now()) / 60000))} 分钟后关闭`}</span><Glyph name="arrowRight"/></button>{room.isOwner && <button className="lr-btn is-dense is-quiet" onClick={() => remove(room)} disabled={state.busy} aria-label={`关闭房间：${room.name}`}><Glyph name="x"/></button>}</article>)}
       {!rooms.length && <div className="sw-lobby-empty"><BrandMark size={64}/><h2>{query ? '没有找到这个房间。' : '客厅准备好了，等你开场。'}</h2><p>{query ? '换个关键词试试。' : '创建一个房间，邀请朋友一起分享。'}</p></div>}
     </div><p className="sw-footnote"><Glyph name="clock" size={14}/>房间空置 15 分钟自动关闭 · 每位成员都能同时共享</p>
   </main>;
@@ -282,10 +282,10 @@ function Settings({ state, service, close }: { state:RoomState; service:RoomServ
 }
 function RoomEditor({ room, state, service, close, busy }: { room?:Room; state:RoomState; service:RoomService; close:() => void; busy:boolean }) {
   const { data:status, error:statusError } = useServiceStatus(!room);
-  const [provider, setProvider] = useState<'agora'|'zego'|'volc'>(() => (['agora','zego','volc'] as const).find(key => state.providers[key]) || 'agora');
+  const [provider, setProvider] = useState<RtcProvider>(() => providerKeys.find(key => state.providers[key]) || 'agora');
   useEffect(() => {
     if (room || !status || !lowBalance(status[provider])) return;
-    const available = (['agora','zego','volc'] as const).find(key => state.providers[key] && !lowBalance(status[key]));
+    const available = providerKeys.find(key => state.providers[key] && !lowBalance(status[key]));
     if (available) setProvider(available);
   }, [room, status, provider, state.providers]);
   return <Modal title={room ? '编辑房间' : '给大家留个位置。'} close={close}><form className="sw-form" onSubmit={async event => { event.preventDefault(); const form = new FormData(event.currentTarget); if (await service.saveRoom({ name:String(form.get('name')),description:String(form.get('description')),provider },room)) close(); }}>

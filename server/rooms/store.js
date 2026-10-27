@@ -33,6 +33,9 @@ export class RoomStore {
         appId TEXT NOT NULL, day TEXT NOT NULL, minutes REAL NOT NULL,
         PRIMARY KEY (appId, day)
       );
+      CREATE TABLE IF NOT EXISTS rtc_provider_bindings (
+        provider TEXT PRIMARY KEY, appId TEXT NOT NULL
+      );
     `);
     const columns = this.db.prepare('PRAGMA table_info(rooms)').all().map(c => c.name);
     if (!columns.includes('emptySince')) this.db.exec('ALTER TABLE rooms ADD COLUMN emptySince INTEGER');
@@ -89,6 +92,11 @@ export class RoomStore {
   }
   setQuotaAnchor(provider, month, remaining, estimated) {
     this.db.prepare('UPDATE rtc_quota SET anchor_remaining=?,anchor_estimated=? WHERE provider=? AND month=? AND anchor_remaining IS NULL').run(remaining, estimated, provider, month);
+  }
+  bindVolcProvider(provider, appId) {
+    if (this.db.prepare('SELECT 1 FROM rtc_provider_bindings WHERE appId=? AND provider<>?').get(appId, provider)) return false;
+    this.db.prepare('INSERT OR IGNORE INTO rtc_provider_bindings(provider,appId) VALUES (?,?)').run(provider, appId);
+    return this.db.prepare('SELECT appId FROM rtc_provider_bindings WHERE provider=?').get(provider)?.appId === appId;
   }
   volcDaily(appId, month) {
     return this.db.prepare('SELECT day, minutes FROM volc_daily_usage WHERE appId=? AND day>=? AND day<? ORDER BY day')

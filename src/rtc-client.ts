@@ -1,4 +1,5 @@
 import AgoraRTC from 'agora-rtc-sdk-ng';
+import type { RtcProvider } from './types';
 
 type Kind = 'audio' | 'video';
 type Remote = { uid:number; hasAudio:boolean; hasVideo:boolean; videoTrack?:any; audioTrack?:any; streamId?:string; stream?:MediaStream };
@@ -53,7 +54,7 @@ export class RtcClient {
       return { uid:user.uid, kind:video || (!audio && user.hasVideo) ? 'video' : 'audio', width:settings?.width || 0, height:settings?.height || 0 };
     });
   }
-  async setProvider(provider:'agora'|'zego'|'volc') { this.provider = provider; this.remotes.clear(); this.engine = undefined; this.sdk = undefined; }
+  async setProvider(provider:RtcProvider) { this.provider = provider === 'volc2' ? 'volc' : provider; this.remotes.clear(); this.engine = undefined; this.sdk = undefined; }
   private remote(uid:number):Remote { let user = this.remotes.get(uid); if (!user) { user = { uid, hasAudio:false, hasVideo:false }; this.remotes.set(uid, user); } return user; }
   async join(appId:string|number, room:string, token:string, uid:number) {
     if (this.provider === 'agora') return this.agora.join(String(appId), room, token, uid);

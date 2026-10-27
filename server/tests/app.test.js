@@ -43,7 +43,7 @@ function privileges(token) {
 test('configuration contains no credentials and missing config fails explicitly', async t => {
   const { owner } = await server(t, {});
   const config = await owner('/api/config');
-  assert.deepEqual(config.data, { configured: false, realtime: true, providers: { agora: false, zego: false, volc: false } });
+  assert.deepEqual(config.data, { configured: false, realtime: true, providers: { agora: false, zego: false, volc: false, volc2:false } });
   assert.equal(config.headers.get('cache-control'), 'no-store');
   assert.equal((await owner('/api/rooms', { name: '测试房间' })).status, 503);
 });
@@ -110,6 +110,29 @@ test('火山房间令牌绑定房间与用户并包含发布和订阅权限', as
   const count = msg.readUInt16LE(pos); pos += 2; const rights = [];
   for (let i = 0; i < count; i++) { rights.push(msg.readUInt16LE(pos)); pos += 6; }
   assert.deepEqual(rights, [0, 1, 2, 3, 4]);
+});
+test('两个火山应用可独立创建房间，使用各自 AppID 和 AppKey 签发 Token', async t => {
+  const env = { ...credentials, VOLC_RTC_APP_ID:'a'.repeat(24), VOLC_RTC_APP_KEY:'key-one', VOLC_RTC_APP_ID_2:'b'.repeat(24), VOLC_RTC_APP_KEY_2:'key-two' };
+  const status = { agora:{status:'unavailable'}, zego:{status:'unavailable'}, volc:{status:'ok',remaining:9000,total:10000}, volc2:{status:'ok',remaining:8000,total:10000} };
+  const { owner, guest } = await server(t, env, {usageService:async () => status});
+  const config = await owner('/api/config'); assert.equal(config.data.providers.volc, true); assert.equal(config.data.providers.volc2, true);
+  for (const [provider, appId, appKey] of [['volc',env.VOLC_RTC_APP_ID,env.VOLC_RTC_APP_KEY],['volc2',env.VOLC_RTC_APP_ID_2,env.VOLC_RTC_APP_KEY_2]]) {
+    const room = (await owner('/api/rooms', {name:provider,provider})).data;
+    assert.equal(room.provider, provider);
+    const tokenResult = (await guest(`/api/rooms/${room.id}/token`, {})).data;
+    assert.equal(tokenResult.appId, appId); assert.equal(tokenResult.provider, provider);
+    const packed = Buffer.from(tokenResult.token.slice(27), 'base64');
+    const length = packed.readUInt16LE(0), message = packed.subarray(2, 2 + length);
+    const sigLength = packed.readUInt16LE(2 + length), signature = packed.subarray(4 + length, 4 + length + sigLength);
+    assert.deepEqual(signature, createHmac('sha256', appKey).update(message).digest());
+  }
+});
+
+test('重复的火山 AppID 不得作为两个独立额度使用', async t => {
+  const id = 'a'.repeat(24), env = { ...credentials, VOLC_RTC_APP_ID:id, VOLC_RTC_APP_KEY:'first', VOLC_RTC_APP_ID_2:id, VOLC_RTC_APP_KEY_2:'second' };
+  const { owner } = await server(t, env);
+  const config = await owner('/api/config'); assert.equal(config.data.providers.volc, true); assert.equal(config.data.providers.volc2, false);
+  assert.equal((await owner('/api/rooms', {name:'重复',provider:'volc2'})).status, 503);
 });
 test('username is required before browsing the public room lobby', async t => {
   const { browser } = await server(t);

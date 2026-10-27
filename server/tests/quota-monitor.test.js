@@ -14,6 +14,7 @@ test('各服务商按分辨率和指定倍率计算', () => {
   assert.equal(rateFor('volc', 1920 * 1080), 1);
   assert.equal(rateFor('volc', 2560 * 1440), 1);
   assert.equal(rateFor('volc', 3840 * 2160), 1);
+  assert.equal(rateFor('volc2', 3840 * 2160), 1);
   assert.equal(rateFor('zego', 640 * 360), 1.7);
   assert.equal(rateFor('zego', 640 * 360 + 1), 3.6);
   assert.equal(rateFor('zego', 1280 * 720), 3.6);
@@ -139,6 +140,28 @@ test('火山按应用用量推算余量并扣除后续本地用量，不沿用�
   assert.equal((await monitor.snapshot()).volc.remaining, 9496);
   upstream = 9490;
   assert.equal((await monitor.snapshot()).volc.remaining, 9490);
+});
+
+test('两个火山应用各自累计和保护，只关闭达到保护线的应用房间', async t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  const now = Date.parse('2026-10-20T00:00:00Z');
+  room(store, 'first', 'volc', now); room(store, 'second', 'volc2', now);
+  store.addUsage('volc', '2026-10', 'first', 9500);
+  store.addUsage('volc2', '2026-10', 'second', 100);
+  const closed = [];
+  const monitor = new QuotaMonitor(store, new Map(), empty, (room, reason) => {closed.push([room.id,reason]); store.archive(room.id,reason);}, () => now);
+  const status = await monitor.check();
+  assert.equal(status.volc.remaining, 500); assert.equal(status.volc2.remaining, 9900);
+  assert.deepEqual(closed.map(([id]) => id), ['first']); assert.ok(store.get('second'));
+});
+
+test('火山应用槽位绑定 AppID，防止更换后误用旧用量', t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  assert.equal(store.bindVolcProvider('volc','first'), true);
+  assert.equal(store.bindVolcProvider('volc','first'), true);
+  assert.equal(store.bindVolcProvider('volc','different'), false);
+  assert.equal(store.bindVolcProvider('volc2','first'), false);
+  assert.equal(store.bindVolcProvider('volc2','second'), true);
 });
 
 test('即构供应商额度与本地估算分别显示，并按保守值保护', async t => {

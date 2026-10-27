@@ -38,8 +38,17 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   const configured = /^[a-f\d]{32}$/i.test(env.AGORA_APP_ID || '') && /^[a-f\d]{32}$/i.test(env.AGORA_APP_CERTIFICATE || '');
   const zegoId = Number(env.ZEGO_APP_ID);
   const zegoConfigured = Number.isInteger(zegoId) && zegoId > 0 && zegoId <= 0xffffffff && Buffer.byteLength(env.ZEGO_SERVER_SECRET || '') === 32;
-  const volcConfigured = (env.VOLC_RTC_APP_ID || '').length === 24 && !!env.VOLC_RTC_APP_KEY;
-  const usage = options.usageService || createUsageService(env, undefined, undefined, store);
+  const volcApps = {
+    volc: { appId:env.VOLC_RTC_APP_ID, appKey:env.VOLC_RTC_APP_KEY },
+    volc2: { appId:env.VOLC_RTC_APP_ID_2, appKey:env.VOLC_RTC_APP_KEY_2 },
+  };
+  const primary = volcApps.volc, secondary = volcApps.volc2;
+  const primaryValid = typeof primary.appId === 'string' && primary.appId.length === 24 && !!primary.appKey;
+  const secondaryValid = typeof secondary.appId === 'string' && secondary.appId.length === 24 && !!secondary.appKey && secondary.appId !== primary.appId;
+  const providers = { agora:configured, zego:zegoConfigured,
+    volc:primaryValid && store.bindVolcProvider('volc', primary.appId),
+    volc2:secondaryValid && store.bindVolcProvider('volc2', secondary.appId) };
+  const usage = options.usageService || createUsageService(env, undefined, undefined, store, providers);
   const monitor = new QuotaMonitor(store, sessions, usage, (room, reason) => {
     store.archive(room.id, reason);
     for (const [key, session] of sessions) if (session.roomId === room.id) sessions.delete(key);
@@ -97,7 +106,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     req.session = session;
     next();
   }
-  app.get('/api/config', (_req, res) => res.json({ configured: configured || zegoConfigured || volcConfigured, realtime: true, providers: { agora: configured, zego: zegoConfigured, volc: volcConfigured } }));
+  app.get('/api/config', (_req, res) => res.json({ configured:Object.values(providers).some(Boolean), realtime:true, providers }));
   app.get('/api/service-status', async (_req, res) => res.json(await monitor.check()));
   app.get('/api/profile', (req, res) => res.json({ name: store.profile(req.identity)?.name || null }));
   app.post('/api/profile', (req, res) => {
@@ -126,8 +135,8 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   app.get('/api/rooms/:id', access, (req, res) => res.json(publicRoom(req.room, req.identity)));
   app.post('/api/rooms', async (req, res) => {
     const provider = req.body?.provider ?? 'agora';
-    if (!['agora', 'zego', 'volc'].includes(provider)) return res.status(400).json({ error: '不支持的 RTC 服务商。' });
-    if (!(provider === 'agora' ? configured : provider === 'zego' ? zegoConfigured : volcConfigured)) return res.status(503).json({ error: '所选 RTC 服务商的服务端凭据尚未配置。' });
+    if (!Object.hasOwn(providers, provider)) return res.status(400).json({ error: '不支持的 RTC 服务商。' });
+    if (!providers[provider]) return res.status(503).json({ error: '所选 RTC 服务商的服务端凭据尚未配置，或应用 ID 与已有用量记录不匹配。' });
     const fields = roomFields(req.body, req.profile.name);
     if (!fields) return res.status(400).json({ error: '房间名称最多 40 字，描述最多 160 字。' });
     const status = await monitor.check();
@@ -161,7 +170,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     res.json(publicRoom(req.room, req.identity));
   });
   app.post('/api/rooms/:id/token', access, async (req, res) => {
-    if (!(req.room.provider === 'zego' ? zegoConfigured : req.room.provider === 'volc' ? volcConfigured : configured)) return res.status(503).json({ error: '该房间的服务端 RTC 凭据尚未配置。' });
+    if (!providers[req.room.provider || 'agora']) return res.status(503).json({ error: '该房间的服务端 RTC 凭据尚未配置，或应用 ID 与已有用量记录不匹配。' });
     const status = await monitor.check();
     if (status[req.room.provider || 'agora']?.remaining <= QUOTA_RESERVE_MINUTES || !store.get(req.room.id)) return res.status(403).json({ error: '服务商预计可用时长已达到 500 分钟保护线，房间已关闭。' });
     let session = req.body?.sessionKey && sessions.get(req.body.sessionKey);
@@ -184,9 +193,10 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     store.occupied(req.room.id, Date.now());
     store.save(req.room.id, req.identity);
     // Every invited member can publish and subscribe, including when co-host authentication is enabled.
-    const token = req.room.provider === 'zego' ? zegoToken(zegoId, env.ZEGO_SERVER_SECRET, String(session.uid), req.room.id, rtcTokenLifetime) : req.room.provider === 'volc' ? volcToken(env.VOLC_RTC_APP_ID, env.VOLC_RTC_APP_KEY, req.room.id, String(session.uid), rtcTokenLifetime) :
+    const volcApp = volcApps[req.room.provider];
+    const token = req.room.provider === 'zego' ? zegoToken(zegoId, env.ZEGO_SERVER_SECRET, String(session.uid), req.room.id, rtcTokenLifetime) : volcApp ? volcToken(volcApp.appId, volcApp.appKey, req.room.id, String(session.uid), rtcTokenLifetime) :
       agoraToken(env.AGORA_APP_ID, env.AGORA_APP_CERTIFICATE, req.room.id, session.uid, rtcTokenLifetime);
-    res.json({ appId: req.room.provider === 'zego' ? zegoId : req.room.provider === 'volc' ? env.VOLC_RTC_APP_ID : env.AGORA_APP_ID, provider: req.room.provider, token, uid: session.uid, sessionKey: session.key,
+    res.json({ appId: req.room.provider === 'zego' ? zegoId : volcApp ? volcApp.appId : env.AGORA_APP_ID, provider: req.room.provider, token, uid: session.uid, sessionKey: session.key,
       expiresAt: session.expiresAt, room: publicRoom(store.get(req.room.id), req.identity), displayName: session.name });
     app.locals.notifyRoom(req.room.id);
   });

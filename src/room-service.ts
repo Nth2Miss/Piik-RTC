@@ -3,7 +3,7 @@ import { captureScreen, type CapturedScreen } from './capture';
 import { defaults, normalizePreferences, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
 import { usernameError } from './username';
-import type { Participant, Room } from './types';
+import type { Participant, Room, RtcProvider } from './types';
 import { RtcClient } from './rtc-client';
 
 export interface RoomState {
@@ -27,7 +27,7 @@ export interface RoomState {
   notice?: { message: string; error: boolean };
   budgetAlert?: string;
   preferences: Preferences;
-  providers: Record<'agora'|'zego'|'volc', boolean>;
+  providers: Record<RtcProvider, boolean>;
 }
 export interface ConnectionSnapshot {
   at: number;
@@ -94,7 +94,7 @@ export const inviteUrl = (room: Room) => `${location.origin}/#room=${room.id}`;
 export function createRoomService() {
   let preferences = { ...defaults }, name = '';
   try { preferences = normalizePreferences(JSON.parse(localStorage.getItem('screen-preferences') || '{}')); name = localStorage.getItem('screen-display-name') || ''; } catch { /* optional storage */ }
-  let state: RoomState = { view:'welcome', name, configured:false, realtime:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences, providers:{ agora:false, zego:false, volc:false } };
+  let state: RoomState = { view:'welcome', name, configured:false, realtime:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences, providers:{ agora:false, zego:false, volc:false, volc2:false } };
   const listeners = new Set<() => void>();
   const issues: { at:string; kind:string; message:string }[] = [];
   const redact = (value: string) => value
@@ -616,7 +616,7 @@ export function createRoomService() {
       if (url.origin !== location.origin || !/^[a-f0-9]{12}$/.test(id || '')) throw new Error('请使用本站生成的完整邀请链接。');
       await enter(await api<Room>(`/api/rooms/${id}`));
     }),
-    saveRoom:(fields:{name:string;description:string;provider?:'agora'|'zego'|'volc'}, room?:Room) => run(async () => {
+    saveRoom:(fields:{name:string;description:string;provider?:RtcProvider}, room?:Room) => run(async () => {
       const saved = await api<Room>(room ? `/api/rooms/${room.id}` : '/api/rooms', fields, room ? 'PATCH' : 'POST');
       if (room) emit({ room:saved }); else await enter(saved);
       await refreshRooms();

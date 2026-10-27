@@ -1,6 +1,6 @@
 import { PRESENCE_LIFETIME } from '../rooms/lifecycle.js';
 
-const names = { agora:'声网', volc:'火山引擎', zego:'即构' };
+const names = { agora:'声网', volc:'火山引擎 1', volc2:'火山引擎 2', zego:'即构' };
 export const QUOTA_RESERVE_MINUTES = 500;
 const monthOf = time => new Date(time + 8 * 3600_000).toISOString().slice(0, 7);
 function nextMonth(time) {
@@ -19,7 +19,7 @@ export function normalizeMedia(media) {
 // Each connected user consumes audio time unless receiving a remote video.
 export function rateFor(provider, pixels) {
   // The free veRTC resource package deducts one minute per audio or video minute.
-  if (provider === 'volc') return 1;
+  if (provider === 'volc' || provider === 'volc2') return 1;
   if (!pixels) return 1;
   if (provider === 'zego') {
     if (pixels <= 640 * 360) return 1.7;
@@ -87,11 +87,12 @@ export class QuotaMonitor {
   project(raw, at = this.now()) {
     this.account(at);
     const month = monthOf(at), output = { ...raw };
-    for (const provider of ['agora', 'zego', 'volc']) {
+    for (const provider of ['agora', 'zego', 'volc', 'volc2']) {
       let q = this.store.quota(provider, month);
       // RTC usage is an app-level estimate, so never reuse old billing-package anchors.
-      const anchorKey = provider === 'volc' ? 'volc-usage' : provider;
-      let anchor = provider === 'volc' ? this.store.quota(anchorKey, month) : q;
+      const isVolc = provider === 'volc' || provider === 'volc2';
+      const anchorKey = isVolc ? `${provider}-usage` : provider;
+      let anchor = isVolc ? this.store.quota(anchorKey, month) : q;
       const upstream = raw[provider];
       // Reserve a full minute for each partially used ZEGO tier across the billing month.
       const estimated = provider === 'zego'
@@ -107,7 +108,7 @@ export class QuotaMonitor {
       }
       let remaining = Math.max(0, anchor.anchor_remaining === null ? 10000 - estimated : anchor.anchor_remaining - Math.max(0, estimated - anchor.anchor_estimated));
       if (upstream?.status === 'ok' && Number.isFinite(upstream.remaining)) remaining = Math.max(0, Math.min(remaining, upstream.remaining));
-      if (provider === 'zego' || provider === 'volc') remaining = Math.min(remaining, Math.max(0, 10000 - estimated));
+      if (provider === 'zego' || isVolc) remaining = Math.min(remaining, Math.max(0, 10000 - estimated));
       output[provider] = { ...upstream, status:'ok', total:upstream?.total ?? 10000, remaining, unit:upstream?.unit || '标准分钟', estimated:true, localUsed:estimated,
         supplier:upstream || {status:'unavailable'},
         basis:anchor.anchor_remaining !== null ? (provider === 'zego' ? '控制台余量与本地估算' : '供应商用量推算与本地估算') : '本地估算' };
