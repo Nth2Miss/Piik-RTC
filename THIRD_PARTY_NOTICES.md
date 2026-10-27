@@ -1,5 +1,7 @@
 # Third-party notices
 
+Piik-RTC itself is licensed under the MIT License; see [LICENSE](LICENSE). The notices below cover third-party components included in this repository.
+
 ## Piik
 
 This project vendors and directly imports Piik's React living-room components, production styles, SVG artwork, tooltips, animations, theme controls and locale resources from [TNTcraftHIM/Piik](https://github.com/TNTcraftHIM/Piik), revision `066e218d84a237db41d455975c89a002eb3d0d79`.

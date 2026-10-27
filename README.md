@@ -43,6 +43,8 @@ docker compose up -d
 
 完整的环境变量、Node.js / Docker / 反向代理 / 数据备份、双火山应用与即构 Cookie 说明见 [部署文档](docs/deployment.md)。
 
-## 第三方与许可
+## 许可
 
-界面基于 [Piik](https://github.com/TNTcraftHIM/Piik)（MIT）并保留其版权声明，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Piik-RTC 以 [MIT 许可](LICENSE)发布。
+
+界面基于 [Piik](https://github.com/TNTcraftHIM/Piik)（MIT）并保留其版权声明；vendored 部分许可见 `src/vendor/piik/LICENSE`，其他第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
