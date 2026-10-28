@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { normalizeMedia } from '../quota/monitor.js';
+import { clientIp, logEvent, providerLabel, roomLabel } from '../shared/log.js';
 
 const identityPattern = /^[\w-]{32}$/;
 const cookieIdentity = header => header?.split(';').map(part => part.trim())
@@ -48,7 +49,7 @@ export function attachRealtime(server, app, env = process.env) {
   wss.on('connection', (ws, request) => {
     const identity = cookieIdentity(request.headers.cookie);
     if (!identityPattern.test(identity || '')) return ws.close(1008, 'unauthorized');
-    const client = { ws, identity, roomId: undefined, sessionKey: undefined, alive: true };
+    const client = { ws, identity, ip:clientIp(request), roomId: undefined, sessionKey: undefined, alive: true };
     clients.add(client);
 
     ws.on('pong', () => { client.alive = true; });
@@ -82,7 +83,13 @@ export function attachRealtime(server, app, env = process.env) {
         const session = sessions.get(client.sessionKey);
         if (!session || session.roomId !== client.roomId || session.userId !== identity) return;
         session.lastSeen = Date.now();
-        session.sharing = message.sharing === true;
+        const sharing = message.sharing === true;
+        if (sharing !== session.sharing) {
+          const room = store.get(client.roomId);
+          logEvent(sharing ? '开始共享' : '结束共享',
+            { ip:client.ip, room:room ? roomLabel(room) : client.roomId, name:session.name, provider:providerLabel(room?.provider) });
+        }
+        session.sharing = sharing;
         if (message.media && typeof message.media === 'object') session.media = normalizeMedia(message.media);
         store.occupied(client.roomId, Date.now());
         broadcast(client.roomId);

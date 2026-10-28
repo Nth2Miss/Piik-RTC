@@ -9,6 +9,7 @@ import { agoraToken } from './providers/agora/token.js';
 import { zegoToken } from './providers/zego/token.js';
 import { volcToken } from './providers/volc/token.js';
 import { QuotaMonitor, normalizeMedia, QUOTA_RESERVE_MINUTES } from './quota/monitor.js';
+import { clientIp, logEvent, providerLabel, roomLabel } from './shared/log.js';
 
 const secret = () => randomBytes(24).toString('base64url');
 const hour = 3600;
@@ -150,6 +151,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     const now = Date.now();
     const room = { id: randomBytes(6).toString('hex'), ownerId: req.identity, inviteKey: secret(), provider, ...fields, createdAt: now, updatedAt: now };
     store.create(room);
+    logEvent('创建房间', { ip:clientIp(req), room:roomLabel(room), name:room.name, provider:providerLabel(provider) });
     res.status(201).json(publicRoom(store.get(room.id), req.identity));
   });
   app.patch('/api/rooms/:id', access, (req, res) => {
@@ -176,6 +178,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     if (status[req.room.provider || 'agora']?.remaining <= QUOTA_RESERVE_MINUTES || !store.get(req.room.id)) return res.status(403).json({ error: '服务商预计可用时长已达到 500 分钟保护线，房间已关闭。' });
     let session = req.body?.sessionKey && sessions.get(req.body.sessionKey);
     if (req.body?.sessionKey && (!session || session.roomId !== req.room.id || session.userId !== req.identity)) return res.status(403).json({ error: '会话已失效，请重新进入房间。' });
+    let joined = false;
     if (!session) {
       const invalid = usernameError(req.profile.name);
       if (invalid) return res.status(400).json({ error: invalid });
@@ -188,11 +191,13 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
       do { uid = randomInt(1, 2147483647); } while (used.has(uid));
       session = { uid, roomId: req.room.id, userId: req.identity, key: secret(), lastSeen: Date.now(), sharing: false, isOwner: req.room.ownerId === req.identity };
       sessions.set(session.key, session);
+      joined = true;
     }
     session.name = req.profile.name;
     session.expiresAt = Date.now() + hour * 1000;
     store.occupied(req.room.id, Date.now());
     store.save(req.room.id, req.identity);
+    if (joined) logEvent('加入房间', { ip:clientIp(req), room:roomLabel(req.room), name:session.name, provider:providerLabel(req.room.provider) });
     // Every invited member can publish and subscribe, including when co-host authentication is enabled.
     const volcApp = volcApps[req.room.provider];
     const token = req.room.provider === 'zego' ? zegoToken(zegoId, env.ZEGO_SERVER_SECRET, String(session.uid), req.room.id, rtcTokenLifetime) : volcApp ? volcToken(volcApp.appId, volcApp.appKey, req.room.id, String(session.uid), rtcTokenLifetime) :
@@ -204,7 +209,10 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   app.post('/api/rooms/:id/presence', access, ownSession, (req, res) => {
     if (req.session.expiresAt <= Date.now()) return res.status(403).json({ error: 'Token 已到期，请重新进入房间。' });
     req.session.lastSeen = Date.now();
-    req.session.sharing = req.body.sharing === true;
+    const sharing = req.body.sharing === true;
+    if (sharing !== req.session.sharing) logEvent(sharing ? '开始共享' : '结束共享',
+      { ip:clientIp(req), room:roomLabel(req.room), name:req.session.name, provider:providerLabel(req.room.provider) });
+    req.session.sharing = sharing;
     if (req.body.media && typeof req.body.media === 'object') req.session.media = normalizeMedia(req.body.media);
     store.occupied(req.room.id, Date.now());
     app.locals.notifyRoom(req.room.id);
@@ -212,6 +220,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   });
   app.post('/api/rooms/:id/leave', access, ownSession, (req, res) => {
     lifecycle.leave(req.session.key);
+    logEvent('退出房间', { ip:clientIp(req), room:roomLabel(req.room), name:req.session.name, provider:providerLabel(req.room.provider) });
     app.locals.notifyRoom(req.room.id);
     res.json({ ok: true });
   });
