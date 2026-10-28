@@ -23,7 +23,7 @@
 启动后会在后台读取 GitHub Releases 的 `version.json`，与当前程序集版本比较。发现新版本时会提示下载，下载过程显示进度，完成后校验下载文件的程序集版本，再通过 PowerShell 辅助进程在程序退出后启动新版本并删除旧文件。
 
 - 版本信息优先通过 `https://v4.gh-proxy.org/https://github.com/.../releases/latest/download/version.json` 获取，失败后回退 GitHub 直连。
-- 程序文件同样优先通过 `v4.gh-proxy.org` 下载，失败后回退 `github.com` 原始地址。
+- 程序文件会并发探测 `v4.gh-proxy.org`、`v6.gh-proxy.org`、`gh-proxy.com`、`ghproxy.net`，选择最快的镜像并用 4 个连接分段下载；线路中断时自动切换到其他镜像，全部不可用后回退 `github.com` 原始地址。下载框会显示实时速度。
 - 更新会下载到当前 exe 所在目录，因此程序需要放在有写权限的位置；放在受保护目录时请手动下载替换。
 - 右键菜单中的“检查更新…”可以手动检查；设置环境变量 `PIIK_DISABLE_UPDATE=1` 可以跳过启动检查。
 - 由于文件名带版本号，更新后启动的是新文件，新版本启动后会删除旧版本文件。旧快捷方式可能需要重新指向新文件。
@@ -85,7 +85,7 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 
 内嵌地址会写入 exe，首次启动直接连接该服务器，不需要用户填写。用户仍可以在窗口内右键打开菜单，选择“服务器设置…”修改；`--server` 启动参数和 `PIIK_SERVER_URL` 环境变量也会覆盖它。`desktop:build:embed` 必须通过 `--server` 或 `PIIK_DEFAULT_SERVER_URL` 指定地址；构建脚本也接受环境变量 `PIIK_DEFAULT_SERVER_URL`，便于 CI 使用。
 
-版本号取自 `package.json`，构建时写入桌面程序集，并显示在网页帮助页和桌面服务器设置页。发布前先提升版本（例如 `npm version patch --no-git-tag-version`）；推送到 master/main 后，`.github/workflows/desktop.yml` 会构建 `Piik-v<版本>.exe` 和 `version.json`、上传 artifact，并按该版本创建/更新 GitHub Release。推送匹配的 `v<version>` tag 仍会校验 tag 与版本号一致。
+版本号取自 `package.json`，构建时写入桌面程序集，并显示在网页帮助页和桌面服务器设置页。发布前先提升版本（例如 `npm version patch --no-git-tag-version`）；桌面端由手动触发：在 GitHub Actions 中运行 `.github/workflows/desktop.yml` 的 `Desktop` workflow，会构建 `Piik-v<版本>.exe` 和 `version.json`、上传 artifact，并按该版本创建/更新 GitHub Release。
 
 构建流程：
 

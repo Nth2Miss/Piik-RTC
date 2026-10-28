@@ -12,15 +12,15 @@ namespace PiikDesktop
         private readonly ProgressBar _progress;
         private readonly Button _cancel;
         private readonly string _prefix;
-        private readonly Func<IProgress<int>, CancellationToken, Task<string>> _download;
+        private readonly Func<IProgress<DownloadProgress>, CancellationToken, Task<string>> _download;
         private readonly CancellationTokenSource _cancellation = new CancellationTokenSource();
         private bool _finished;
 
         public string DownloadedPath { get; private set; }
         public Exception Error { get; private set; }
-        public IProgress<int> Reporter { get; }
+        public IProgress<DownloadProgress> Reporter { get; }
 
-        public UpdateProgressForm(Version version, Func<IProgress<int>, CancellationToken, Task<string>> download)
+        public UpdateProgressForm(Version version, Func<IProgress<DownloadProgress>, CancellationToken, Task<string>> download)
         {
             _download = download;
             _prefix = "正在下载新版本 v" + version.ToString(3);
@@ -65,7 +65,7 @@ namespace PiikDesktop
             Controls.Add(_status);
             Controls.Add(_progress);
             Controls.Add(_cancel);
-            Reporter = new System.Progress<int>(Report);
+            Reporter = new System.Progress<DownloadProgress>(Report);
         }
 
         protected override async void OnShown(EventArgs e)
@@ -112,18 +112,26 @@ namespace PiikDesktop
             try { _cancellation.Cancel(); } catch { }
         }
 
-        private void Report(int percent)
+        private void Report(DownloadProgress progress)
         {
             if (IsDisposed) return;
-            if (percent < 0)
+            if (progress.Percent < 0)
             {
                 _progress.Style = ProgressBarStyle.Marquee;
                 _status.Text = _prefix + "…";
                 return;
             }
             if (_progress.Style != ProgressBarStyle.Continuous) _progress.Style = ProgressBarStyle.Continuous;
-            _progress.Value = Math.Max(0, Math.Min(100, percent));
-            _status.Text = _prefix + "… " + _progress.Value + "%";
+            _progress.Value = Math.Max(0, Math.Min(100, progress.Percent));
+            var speed = FormatSpeed(progress.BytesPerSecond);
+            _status.Text = _prefix + "… " + _progress.Value + "%" + (speed.Length == 0 ? "" : " · " + speed);
+        }
+
+        private static string FormatSpeed(long bytesPerSecond)
+        {
+            if (bytesPerSecond <= 0) return "";
+            if (bytesPerSecond >= 1024 * 1024) return (bytesPerSecond / (1024.0 * 1024.0)).ToString("0.0") + " MB/s";
+            return Math.Max(1, bytesPerSecond / 1024) + " KB/s";
         }
     }
 }

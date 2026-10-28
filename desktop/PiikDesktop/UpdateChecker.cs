@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -15,6 +16,18 @@ using System.Windows.Forms;
 
 namespace PiikDesktop
 {
+    internal struct DownloadProgress
+    {
+        public readonly int Percent;
+        public readonly long BytesPerSecond;
+
+        public DownloadProgress(int percent, long bytesPerSecond)
+        {
+            Percent = percent;
+            BytesPerSecond = bytesPerSecond;
+        }
+    }
+
     internal sealed class ReleaseInfo
     {
         public Version Version { get; set; }
@@ -24,17 +37,32 @@ namespace PiikDesktop
 
     /// <summary>
     /// Checks GitHub Releases on startup and installs a newer portable executable.
-    /// Git operations prefer https://v4.gh-proxy.org/ and fall back to GitHub directly.
+    /// Downloads probe the gh-proxy mirrors, pick the fastest one and fall back to GitHub directly.
     /// </summary>
     internal static class UpdateChecker
     {
         private const string Owner = "Nth2Miss";
         private const string Repository = "Piik-RTC";
-        private const string ProxyBase = "https://v4.gh-proxy.org/";
         private const string ApiUrl = "https://api.github.com/repos/" + Owner + "/" + Repository + "/releases/latest";
         private const string ReleasesLatestUrl = "https://github.com/" + Owner + "/" + Repository + "/releases/latest";
         private const string ReleasesAtomUrl = "https://github.com/" + Owner + "/" + Repository + "/releases.atom";
         private const string VersionManifestUrl = "https://github.com/" + Owner + "/" + Repository + "/releases/latest/download/version.json";
+
+        private static readonly string[] ProxyBases =
+        {
+            "https://v4.gh-proxy.org/",
+            "https://v6.gh-proxy.org/",
+            "https://gh-proxy.com/",
+            "https://ghproxy.net/",
+        };
+
+        private const int ProbeBytes = 256 * 1024;
+        private const int SegmentCount = 4;
+        private const long MultiSegmentThreshold = 1024L * 1024L;
+        private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(6);
+        private static readonly TimeSpan HeaderTimeout = TimeSpan.FromSeconds(20);
+        private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(15);
 
         private static readonly HttpClient Client = CreateClient(true);
         private static readonly HttpClient NoRedirectClient = CreateClient(false);
@@ -45,6 +73,7 @@ namespace PiikDesktop
             @"(?<tag>v?\d+(?:\.\d+){1,3})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static int _running;
+        private static long _lastProgressTicks;
 
         public static async Task CheckAsync(IWin32Window owner, bool manual)
         {
@@ -126,7 +155,13 @@ namespace PiikDesktop
 
         private static HttpClient CreateClient(bool allowRedirect)
         {
-            try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12; } catch { }
+            try
+            {
+                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+                // Segment downloads open several connections to the same mirror.
+                ServicePointManager.DefaultConnectionLimit = Math.Max(ServicePointManager.DefaultConnectionLimit, 8);
+            }
+            catch { }
             var handler = new HttpClientHandler
             {
                 AllowAutoRedirect = allowRedirect,
@@ -367,28 +402,40 @@ namespace PiikDesktop
         private static string ProxyUrl(string url)
         {
             if (string.IsNullOrWhiteSpace(url)) return url;
-            if (url.StartsWith(ProxyBase, StringComparison.OrdinalIgnoreCase)) return url;
-            return ProxyBase + url;
+            if (IsMirrorUrl(url)) return url;
+            return ProxyBases[0] + url;
         }
 
-        private static bool IsProxyUrl(string url)
+        private static bool IsMirrorUrl(string url)
         {
-            return url != null && url.StartsWith(ProxyBase, StringComparison.OrdinalIgnoreCase);
+            if (url == null) return false;
+            return ProxyBases.Any(item => url.StartsWith(item, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static IEnumerable<string> DownloadUrls(ReleaseInfo release)
+        private static List<string> DownloadUrls(ReleaseInfo release)
         {
             var urls = new List<string>();
-            foreach (var asset in release.AssetUrls) AddUnique(urls, ProxyUrl(asset));
+            foreach (var asset in release.AssetUrls)
+            {
+                foreach (var proxy in ProxyBases) AddUnique(urls, proxy + asset);
+            }
             foreach (var asset in release.AssetUrls) AddUnique(urls, asset);
             return urls;
         }
 
-        private static async Task<string> DownloadAsync(ReleaseInfo release, string target, IProgress<int> progress, CancellationToken token)
+        private sealed class DownloadRoute
+        {
+            public string Url;
+            public bool SupportsRanges;
+            public long Length;
+            public double Speed;
+        }
+
+        private static async Task<string> DownloadAsync(ReleaseInfo release, string target, IProgress<DownloadProgress> progress, CancellationToken token)
         {
             if (File.Exists(target) && MatchesVersion(target, release.Version))
             {
-                progress?.Report(100);
+                progress?.Report(new DownloadProgress(100, 0));
                 return target;
             }
 
@@ -398,64 +445,28 @@ namespace PiikDesktop
 
             var temporary = target + "." + Guid.NewGuid().ToString("N") + ".download";
             var errors = new List<string>();
+            Interlocked.Exchange(ref _lastProgressTicks, 0);
             try
             {
-                foreach (var url in DownloadUrls(release))
+                var urls = DownloadUrls(release);
+                var routes = await RankRoutesAsync(urls, token);
+                var attempted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var route in routes)
                 {
                     token.ThrowIfCancellationRequested();
-                    progress?.Report(-1);
-                    try
-                    {
-                        using (var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
-                        {
-                            cancellation.CancelAfter(IsProxyUrl(url) ? TimeSpan.FromSeconds(45) : TimeSpan.FromSeconds(120));
-                            using (var response = await Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellation.Token))
-                            {
-                                if (!response.IsSuccessStatusCode)
-                                {
-                                    errors.Add(url + " -> HTTP " + (int)response.StatusCode);
-                                    continue;
-                                }
+                    attempted.Add(route.Url);
+                    var result = await TryDownloadAsync(route.Url, route, temporary, target, release, progress, errors, token);
+                    if (result != null) return result;
+                }
 
-                                var total = response.Content.Headers.ContentLength ?? -1;
-                                using (var input = await response.Content.ReadAsStreamAsync())
-                                using (var output = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
-                                {
-                                    var buffer = new byte[81920];
-                                    long received = 0;
-                                    int read;
-                                    while ((read = await input.ReadAsync(buffer, 0, buffer.Length, cancellation.Token)) > 0)
-                                    {
-                                        await output.WriteAsync(buffer, 0, read, cancellation.Token);
-                                        received += read;
-                                        if (total > 0) progress?.Report((int)Math.Min(100, received * 100 / total));
-                                    }
-                                }
-                            }
-                        }
-
-                        if (MatchesVersion(temporary, release.Version))
-                        {
-                            if (File.Exists(target)) File.Delete(target);
-                            File.Move(temporary, target);
-                            progress?.Report(100);
-                            Log.Write("update downloaded: " + target + " from " + url);
-                            return target;
-                        }
-                        errors.Add(url + " -> 程序版本不匹配");
-                    }
-                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
-                    {
-                        errors.Add(url + " -> 超时");
-                    }
-                    catch (Exception exception)
-                    {
-                        errors.Add(url + " -> " + exception.Message);
-                    }
-                    finally
-                    {
-                        try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
-                    }
+                // A probe can fail while a plain request still works, so try the rest once.
+                foreach (var url in urls)
+                {
+                    if (attempted.Contains(url)) continue;
+                    token.ThrowIfCancellationRequested();
+                    var result = await TryDownloadAsync(url, null, temporary, target, release, progress, errors, token);
+                    if (result != null) return result;
                 }
             }
             finally
@@ -463,7 +474,277 @@ namespace PiikDesktop
                 try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
             }
 
-            throw new InvalidOperationException(string.Join("；", errors.Take(4)));
+            throw new InvalidOperationException(errors.Count == 0 ? "没有可用的下载线路。" : string.Join("；", errors.Take(4)));
+        }
+
+        private static async Task<string> TryDownloadAsync(string url, DownloadRoute route, string temporary, string target, ReleaseInfo release, IProgress<DownloadProgress> progress, List<string> errors, CancellationToken token)
+        {
+            progress?.Report(new DownloadProgress(-1, 0));
+            try
+            {
+                if (route != null && route.SupportsRanges && route.Length >= MultiSegmentThreshold)
+                    await DownloadRangedAsync(route, temporary, progress, token);
+                else
+                    await DownloadSingleAsync(url, temporary, progress, token);
+
+                if (!MatchesVersion(temporary, release.Version))
+                {
+                    errors.Add(url + " -> 程序版本不匹配");
+                    return null;
+                }
+
+                if (File.Exists(target)) File.Delete(target);
+                File.Move(temporary, target);
+                progress?.Report(new DownloadProgress(100, 0));
+                Log.Write("update downloaded: " + target + " from " + url);
+                return target;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Write("update route failed: " + url + " -> timeout");
+                errors.Add(url + " -> 超时");
+                return null;
+            }
+            catch (Exception exception)
+            {
+                Log.Write("update route failed: " + url + " -> " + exception.Message);
+                errors.Add(url + " -> " + exception.Message);
+                return null;
+            }
+            finally
+            {
+                try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+            }
+        }
+
+        private static async Task<List<DownloadRoute>> RankRoutesAsync(List<string> urls, CancellationToken token)
+        {
+            var routes = await ProbeAllAsync(urls.Where(IsMirrorUrl).ToList(), token);
+            if (routes.Count == 0)
+                routes = await ProbeAllAsync(urls.Where(url => !IsMirrorUrl(url)).ToList(), token);
+            return routes.OrderByDescending(route => route.Speed).ToList();
+        }
+
+        private static async Task<List<DownloadRoute>> ProbeAllAsync(List<string> urls, CancellationToken token)
+        {
+            var probes = new List<Task<DownloadRoute>>();
+            foreach (var url in urls) probes.Add(ProbeAsync(url, token));
+            var results = await Task.WhenAll(probes);
+            return results.Where(route => route != null).ToList();
+        }
+
+        private static async Task<DownloadRoute> ProbeAsync(string url, CancellationToken token)
+        {
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                timeout.CancelAfter(ProbeTimeout);
+                try
+                {
+                    using (var request = new HttpRequestMessage(HttpMethod.Get, url))
+                    {
+                        request.Headers.Range = new RangeHeaderValue(0, ProbeBytes - 1);
+                        using (var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token))
+                        {
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                Log.Write("update probe " + url + ": HTTP " + (int)response.StatusCode);
+                                return null;
+                            }
+
+                            var route = new DownloadRoute
+                            {
+                                Url = url,
+                                SupportsRanges = response.StatusCode == HttpStatusCode.PartialContent,
+                                Length = ResponseLength(response),
+                            };
+                            var started = Stopwatch.StartNew();
+                            long received = 0;
+                            using (var input = await response.Content.ReadAsStreamAsync())
+                            {
+                                var buffer = new byte[32768];
+                                while (received < ProbeBytes)
+                                {
+                                    var count = (int)Math.Min(buffer.Length, ProbeBytes - received);
+                                    var read = await input.ReadAsync(buffer, 0, count, timeout.Token);
+                                    if (read <= 0) break;
+                                    received += read;
+                                }
+                            }
+                            started.Stop();
+                            if (received <= 0) return null;
+                            route.Speed = received / Math.Max(started.Elapsed.TotalSeconds, 0.001);
+                            Log.Write("update probe " + url + ": " + Math.Round(route.Speed / 1024) + " KB/s, range=" + route.SupportsRanges + ", length=" + route.Length);
+                            return route;
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    Log.Write("update probe " + url + " failed: " + exception.Message);
+                    return null;
+                }
+            }
+        }
+
+        private static long ResponseLength(HttpResponseMessage response)
+        {
+            var range = response.Content.Headers.ContentRange;
+            if (range != null && range.HasLength && range.Length.HasValue) return range.Length.Value;
+            return response.Content.Headers.ContentLength ?? -1;
+        }
+
+        private static async Task DownloadSingleAsync(string url, string path, IProgress<DownloadProgress> progress, CancellationToken token)
+        {
+            using (var request = new HttpRequestMessage(HttpMethod.Get, url))
+            using (var response = await SendAsync(request, token))
+            {
+                if (!response.IsSuccessStatusCode) throw new InvalidOperationException("HTTP " + (int)response.StatusCode);
+                var total = response.Content.Headers.ContentLength ?? -1;
+                var started = Stopwatch.StartNew();
+                long received = 0;
+                using (var input = await response.Content.ReadAsStreamAsync())
+                using (var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
+                {
+                    var buffer = new byte[81920];
+                    while (true)
+                    {
+                        var read = await ReadAsync(input, buffer, 0, buffer.Length, token);
+                        if (read <= 0) break;
+                        await output.WriteAsync(buffer, 0, read, token);
+                        received += read;
+                        ReportProgress(progress, received, total, started, false);
+                    }
+                }
+                if (total > 0 && received != total) throw new IOException("下载不完整。");
+            }
+        }
+
+        private static async Task DownloadRangedAsync(DownloadRoute route, string path, IProgress<DownloadProgress> progress, CancellationToken token)
+        {
+            var length = route.Length;
+            var segments = (int)Math.Min(SegmentCount, Math.Max(1, length / (512 * 1024)));
+            var part = (long)Math.Ceiling(length / (double)segments);
+            var received = new long[segments];
+            var started = Stopwatch.StartNew();
+
+            using (var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, 81920, true))
+            {
+                output.SetLength(length);
+            }
+
+            using (var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                cancellation.CancelAfter(DownloadTimeout);
+                var tasks = new Task[segments];
+                try
+                {
+                    for (var i = 0; i < segments; i++)
+                    {
+                        var from = i * part;
+                        var to = Math.Min(length - 1, from + part - 1);
+                        var index = i;
+                        tasks[i] = DownloadSegmentAsync(route.Url, path, from, to, index, received, length, progress, started, cancellation.Token);
+                    }
+                    await Task.WhenAll(tasks);
+                }
+                catch
+                {
+                    try { cancellation.Cancel(); } catch { }
+                    try { await Task.WhenAll(tasks); } catch { }
+                    throw;
+                }
+            }
+
+            if (new FileInfo(path).Length != length) throw new IOException("下载文件大小不匹配。");
+            ReportProgress(progress, length, length, started, true);
+        }
+
+        private static async Task DownloadSegmentAsync(string url, string path, long from, long to, int index, long[] received, long total, IProgress<DownloadProgress> progress, Stopwatch started, CancellationToken token)
+        {
+            using (var request = new HttpRequestMessage(HttpMethod.Get, url))
+            {
+                request.Headers.Range = new RangeHeaderValue(from, to);
+                using (var response = await SendAsync(request, token))
+                {
+                    if (response.StatusCode != HttpStatusCode.PartialContent) throw new InvalidOperationException("线路不支持分段下载。");
+                    using (var input = await response.Content.ReadAsStreamAsync())
+                    using (var output = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, 81920, true))
+                    {
+                        output.Seek(from, SeekOrigin.Begin);
+                        var buffer = new byte[81920];
+                        var position = from;
+                        while (position <= to)
+                        {
+                            var count = (int)Math.Min(buffer.Length, to - position + 1);
+                            var read = await ReadAsync(input, buffer, 0, count, token);
+                            if (read <= 0) throw new IOException("连接提前中断。");
+                            await output.WriteAsync(buffer, 0, read, token);
+                            position += read;
+                            received[index] = position - from;
+                            ReportProgress(progress, Sum(received), total, started, false);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            using (var headers = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                headers.CancelAfter(HeaderTimeout);
+                try
+                {
+                    return await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headers.Token);
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    throw new IOException("连接超时。");
+                }
+            }
+        }
+
+        private static async Task<int> ReadAsync(Stream input, byte[] buffer, int offset, int count, CancellationToken token)
+        {
+            using (var idle = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                idle.CancelAfter(ReadTimeout);
+                try
+                {
+                    return await input.ReadAsync(buffer, offset, count, idle.Token);
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    throw new IOException("下载超时。");
+                }
+            }
+        }
+
+        private static long Sum(long[] values)
+        {
+            long total = 0;
+            for (var i = 0; i < values.Length; i++) total += values[i];
+            return total;
+        }
+
+        private static void ReportProgress(IProgress<DownloadProgress> progress, long received, long total, Stopwatch started, bool force)
+        {
+            if (progress == null) return;
+            var now = DateTime.UtcNow.Ticks;
+            var last = Interlocked.Read(ref _lastProgressTicks);
+            if (!force && now - last < TimeSpan.FromMilliseconds(150).Ticks) return;
+            if (Interlocked.CompareExchange(ref _lastProgressTicks, now, last) != last) return;
+            var seconds = Math.Max(started.Elapsed.TotalSeconds, 0.001);
+            var percent = total > 0 ? (int)Math.Min(100, received * 100 / total) : -1;
+            progress.Report(new DownloadProgress(percent, (long)(received / seconds)));
         }
 
         private static bool MatchesVersion(string path, Version expected)

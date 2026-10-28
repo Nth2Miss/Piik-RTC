@@ -1,9 +1,6 @@
 name: Desktop
 
 on:
-  push:
-    branches: [master, main]
-    tags: ['v*']
   workflow_dispatch:
 
 concurrency:
@@ -42,15 +39,6 @@ jobs:
           version=$(node -p "require('./package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Check tag matches package version
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          test "$GITHUB_REF_NAME" = "v${{ steps.version.outputs.version }}" || {
-            echo "Tag $GITHUB_REF_NAME does not match package.json v${{ steps.version.outputs.version }}"
-            exit 1
-          }
-
       - name: Build desktop
         env:
           PIIK_DEFAULT_SERVER_URL: ${{ vars.PIIK_DEFAULT_SERVER_URL }}
@@ -66,7 +54,6 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
