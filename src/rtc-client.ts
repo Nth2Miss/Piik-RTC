@@ -185,7 +185,16 @@ export class RtcClient {
     if (this.provider === 'agora') return this.agora.unpublish(tracks);
     if (!this.engine) return;
     if (this.provider === 'zego') { this.engine.stopPublishingStream(`${this.room}_${this.uid}`); if (this.zegoLocal) this.engine.destroyStream(this.zegoLocal); this.zegoLocal = undefined; }
-    else await this.engine.unpublishScreen(this.sdk.MediaType.AUDIO_AND_VIDEO);
+    else {
+      await this.engine.unpublishScreen(this.sdk.MediaType.AUDIO_AND_VIDEO);
+      // unpublishScreen keeps the external screen track, so the next share's
+      // setScreenEncoderConfig would apply constraints to the stopped track and
+      // the browser rejects it ("Source failed to restart"). Switching back to
+      // internal capture makes the SDK release that track.
+      const index = this.sdk.StreamIndex.STREAM_INDEX_SCREEN;
+      await this.engine.setVideoSourceType(index, this.sdk.VideoSourceType.VIDEO_SOURCE_TYPE_INTERNAL);
+      await this.engine.setAudioSourceType(index, this.sdk.AudioSourceType.AUDIO_SOURCE_TYPE_INTERNAL);
+    }
     this.statsCache.delete('zego:publish');
   }
   async subscribe(user:Remote, kind:Kind) {
