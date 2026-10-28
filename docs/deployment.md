@@ -116,7 +116,7 @@ docker compose down             # 停止并删除容器，保留数据卷
 [2026-01-01T16:00:00.000+08:00] 加入房间 ip=203.0.113.10 room=周末放映室（d8aa717652e1） name=房主 provider="volc(火山引擎 1)"
 ```
 
-反向代理与 Node 同机部署时，来源 IP 取自 `X-Forwarded-For` 的第一跳，请确保代理转发该请求头。日志只输出到标准输出，不写入数据库，可用 `docker compose logs` 或宿主机日志收集工具留存。
+反向代理与 Node 同机或同 Docker 网络部署时，来源 IP 取自 `X-Real-IP` 或 `X-Forwarded-For` 的第一跳，请确保代理转发或覆盖这两个请求头。若日志仍显示 `172.x` 这类 Docker 网关地址，说明请求没有经过带转发头的反向代理：从 Docker 宿主机本地访问、或使用 Docker Desktop 时会出现这种情况，可通过宿主机反向代理或 `network_mode: host` 获取真实来源。日志只输出到标准输出，不写入数据库，可用 `docker compose logs` 或宿主机日志收集工具留存。
 
 镜像名必须与 GitHub 仓库或 GHCR 包名一致。如果仓库尚未改名为 `Piik-RTC`，请把 `docker-compose.yml` 中的 `piik-rtc` 换成实际名称，或使用下面的本地构建方式。
 
