@@ -181,6 +181,8 @@
 .sw-provider-list label { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; }
 .sw-provider-content { display:grid; flex:1; min-width:0; gap:7px; }
 .sw-provider-heading { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:4px 10px; }
+.sw-provider-heading strong { display:inline-flex; align-items:center; gap:7px; }
+.sw-provider-badge { padding:1px 7px; border-radius:999px; background:color-mix(in srgb,var(--live) 15%,transparent); color:var(--live); font-size:10.5px; font-style:normal; font-weight:700; line-height:1.7; }
 .sw-provider-heading small { text-align:right; }
 .sw-provider-content .sw-usage-progress { height:7px; }
 .sw-provider-list label:has(input:disabled) { opacity:.55; }
