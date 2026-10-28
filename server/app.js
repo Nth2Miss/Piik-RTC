@@ -25,6 +25,8 @@ function roomFields(body, defaultName = '') {
 }
 export function createApp(env = process.env, store = new RoomStore(), options = {}) {
   const app = express();
+  // nginx runs on the host or a sibling container, so its forwarded client address is trusted.
+  app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal']);
   const sessions = new Map();
   app.locals.store = store;
   store.resetPresence(PRESENCE_LIFETIME);
