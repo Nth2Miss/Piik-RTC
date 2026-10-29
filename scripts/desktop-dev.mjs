@@ -1,15 +1,31 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
 const port = Number(process.env.PORT || 3000);
 const url = `http://localhost:${port}`;
 const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
-const executable = path.join(root, 'release', `Piik-v${version}.exe`);
+const executable = path.join(root, 'release', `Piik-RTC-v${version}.exe`);
 
-if (!existsSync(executable)) {
-  console.log('单文件桌面端尚未构建，正在构建…');
+function newestSourceTime(directory) {
+  let newest = 0;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === 'bin' || entry.name === 'obj') continue;
+    const full = path.join(directory, entry.name);
+    newest = Math.max(newest, entry.isDirectory() ? newestSourceTime(full) : statSync(full).mtimeMs);
+  }
+  return newest;
+}
+
+const builtAt = existsSync(executable) ? statSync(executable).mtimeMs : 0;
+const needsBuild = !builtAt
+  || newestSourceTime(path.join(root, 'desktop')) > builtAt
+  || statSync(path.join(root, 'public', 'favicon.ico')).mtimeMs > builtAt
+  || statSync(path.join(root, 'scripts', 'build-desktop.mjs')).mtimeMs > builtAt;
+
+if (needsBuild) {
+  console.log(builtAt ? '桌面端源码有更新，正在重新构建…' : '单文件桌面端尚未构建，正在构建…');
   const build = spawnSync(process.execPath, [path.join(root, 'scripts', 'build-desktop.mjs')], { stdio: 'inherit', cwd: root });
   if (build.status !== 0) process.exit(build.status ?? 1);
 }

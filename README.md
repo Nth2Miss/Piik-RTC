@@ -53,8 +53,8 @@ docker compose up -d
 桌面端是一个单文件、免安装的 Windows 程序，连接一台已部署的 Piik-RTC 服务器（不包含服务端）。构建：
 
 ```bash
-npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/Piik-v<版本>.exe
-npm run desktop:build    # 构建单文件 release/Piik-v<版本>.exe
+npm run desktop:dev      # 复用/启动本地服务，构建并运行 release/Piik-RTC-v<版本>.exe
+npm run desktop:build    # 构建单文件 release/Piik-RTC-v<版本>.exe
 npm run desktop:build -- --server=https://piik.example.com   # 内嵌默认服务器
 ```
 

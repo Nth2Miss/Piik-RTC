@@ -153,6 +153,10 @@
       white-space: pre-wrap;
     }
     .error[hidden] { display: none; }
+    #auth-fields .field-label { margin-top: 14px; }
+    #auth-fields .field-label:first-child { margin-top: 0; }
+    .remember { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; color: var(--ink); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+    .remember input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); }
     .footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10.5px; }
     .footnote { margin: 0; color: var(--muted); font-size: 11px; }
     @media (prefers-reduced-motion: reduce) {
@@ -177,17 +181,33 @@
 
     <section class="panel">
       <div class="panel-heading">
-        <h2>连接你的小客厅</h2>
-        <p>需要连接一个已部署的 Piik-RTC 服务。</p>
+        <h2 id="heading">连接你的小客厅</h2>
+        <p id="description">需要连接一个已部署的 Piik-RTC 服务。</p>
       </div>
       <form id="form">
-        <label class="field-label" for="server">服务器地址</label>
-        <label class="input">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-          <input id="server" name="server" type="url" placeholder="https://piik.example.com" autocomplete="url" spellcheck="false" required/>
-        </label>
-        <p class="hint">邀请链接和房间数据来自同一台服务器。</p>
-        <p class="hint">在窗口内右键打开菜单。</p>
+        <div id="server-field">
+          <label class="field-label" for="server">服务器地址</label>
+          <label class="input">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <input id="server" name="server" type="url" placeholder="https://piik.example.com" autocomplete="url" spellcheck="false" required/>
+          </label>
+          <p class="hint">邀请链接和房间数据来自同一台服务器。</p>
+          <p class="hint">在窗口内右键打开菜单。</p>
+        </div>
+        <div id="auth-fields" hidden>
+          <label class="field-label" for="username">用户名</label>
+          <label class="input">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg>
+            <input id="username" name="username" autocomplete="username" spellcheck="false"/>
+          </label>
+          <label class="field-label" for="password">密码</label>
+          <label class="input">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+            <input id="password" name="password" type="password" autocomplete="current-password"/>
+          </label>
+          <label class="remember"><input id="remember" type="checkbox"/>记住密码</label>
+          <p class="hint">密码使用当前 Windows 账户加密后保存在本机。</p>
+        </div>
         <div class="actions">
           <button class="btn primary" id="connect" type="submit">
             <span>连接</span>
@@ -211,11 +231,33 @@
     const back = document.getElementById('back');
     const errorBox = document.getElementById('error');
     const version = document.getElementById('version');
+    const heading = document.getElementById('heading');
+    const description = document.getElementById('description');
+    const serverField = document.getElementById('server-field');
+    const authFields = document.getElementById('auth-fields');
+    const username = document.getElementById('username');
+    const password = document.getElementById('password');
+    const remember = document.getElementById('remember');
+    const authMode = params.get('mode') === 'auth';
 
     const saved = params.get('url') || '';
     input.value = saved || 'http://localhost:3000';
     version.textContent = params.get('version') ? `v${params.get('version')}` : '';
     back.hidden = !saved;
+
+    if (authMode) {
+      heading.textContent = '登录服务器';
+      description.textContent = (params.get('host') || '服务器') + ' 要求进行身份验证';
+      serverField.hidden = true;
+      authFields.hidden = false;
+      input.disabled = true;
+      connect.querySelector('span').textContent = '登录';
+      back.textContent = '取消';
+      back.hidden = false;
+      username.value = params.get('user') || '';
+      remember.checked = params.get('remember') !== '0';
+      if (username.value) password.focus(); else username.focus();
+    }
 
     const queryError = params.get('error');
     if (queryError) showError(queryError);
@@ -234,22 +276,30 @@
       event.preventDefault();
       showError('');
       connect.disabled = true;
-      connect.querySelector('span').textContent = '正在连接…';
+      connect.querySelector('span').textContent = authMode ? '正在登录…' : '正在连接…';
       try {
-        const result = await bridge.setServer(input.value.trim());
-        if (!result || !result.ok) showError(result?.message || '无法连接这个服务器。');
+        if (authMode) {
+          if (!password.value) { showError('请输入密码。'); return; }
+          await bridge.submitAuth({ username: username.value.trim(), password: password.value, remember: remember.checked });
+        } else {
+          const result = await bridge.setServer(input.value.trim());
+          if (!result || !result.ok) showError(result?.message || '无法连接这个服务器。');
+        }
       } catch (error) {
         showError(error?.message || String(error));
       } finally {
         connect.disabled = false;
-        connect.querySelector('span').textContent = '连接';
+        connect.querySelector('span').textContent = authMode ? '登录' : '连接';
       }
     });
 
     back.addEventListener('click', async () => {
       if (!bridge) return;
       back.disabled = true;
-      try { await bridge.cancelSetup(); } catch { /* keep setup visible */ }
+      try {
+        if (authMode) await bridge.cancelAuth();
+        else await bridge.cancelSetup();
+      } catch { /* keep the page visible */ }
       back.disabled = false;
     });
   </script>

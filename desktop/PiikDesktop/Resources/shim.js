@@ -127,6 +127,8 @@
     getConfig: function () { return request('getConfig'); },
     setServer: function (url) { return request('setServer', { url: url }); },
     cancelSetup: function () { return request('cancelSetup'); },
+    submitAuth: function (options) { return request('submitAuth', options); },
+    cancelAuth: function () { return request('cancelAuth'); },
   };
 
   Object.defineProperty(window, 'piikDesktop', {

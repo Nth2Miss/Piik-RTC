@@ -18,7 +18,7 @@
 | `npm run build` | 类型检查并构建到 `dist/` |
 | `npm test` | 运行 `server/tests/*.test.js` 下的 `node:test` 用例 |
 | `npm run desktop:dev` | 本地构建并运行桌面端（Windows） |
-| `npm run desktop:build` | 构建单文件 `release/Piik-v<版本>.exe` |
+| `npm run desktop:build` | 构建单文件 `release/Piik-RTC-v<版本>.exe` |
 | `npm run desktop:helper` | 单独发布 WASAPI 音频组件 |
 
 屏幕共享只能在 `localhost` 或 HTTPS 下工作；网页版请用桌面版 Chrome / Edge 验证。桌面端构建需要 Windows 和 .NET 9 SDK，当前环境无法验证时必须明确说明未验证。

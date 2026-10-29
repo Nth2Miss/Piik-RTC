@@ -49,7 +49,7 @@ jobs:
         with:
           name: Piik-RTC-desktop-v${{ steps.version.outputs.version }}
           path: |
-            release/Piik-v${{ steps.version.outputs.version }}.exe
+            release/Piik-RTC-v${{ steps.version.outputs.version }}.exe
             release/version.json
           if-no-files-found: error
 
@@ -59,7 +59,7 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           name: Piik-RTC v${{ steps.version.outputs.version }}
           files: |
-            release/Piik-v${{ steps.version.outputs.version }}.exe
+            release/Piik-RTC-v${{ steps.version.outputs.version }}.exe
             release/version.json
           generate_release_notes: true
           fail_on_unmatched_files: true

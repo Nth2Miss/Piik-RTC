@@ -11,6 +11,7 @@ namespace PiikDesktop
     internal sealed class AppConfig
     {
         public string ServerUrl = "";
+        public bool RememberAuth = true;
         public int Width = 1280;
         public int Height = 860;
         public int X = int.MinValue;
@@ -39,6 +40,7 @@ namespace PiikDesktop
                 {
                     var values = SimpleJson.ParseObject(File.ReadAllText(ConfigPath, Encoding.UTF8));
                     if (values.TryGetValue("serverUrl", out var server) && server is string text) config.ServerUrl = text;
+                    if (values.TryGetValue("rememberAuth", out var remember)) config.RememberAuth = ToBool(remember, config.RememberAuth);
                     if (values.TryGetValue("width", out var width)) config.Width = ToInt(width, config.Width);
                     if (values.TryGetValue("height", out var height)) config.Height = ToInt(height, config.Height);
                     if (values.TryGetValue("x", out var x)) config.X = ToInt(x, config.X);
@@ -59,7 +61,12 @@ namespace PiikDesktop
             if (string.IsNullOrWhiteSpace(config.ServerUrl)) config.ServerUrl = EmbeddedDefaultServer();
             if (!string.IsNullOrWhiteSpace(config.ServerUrl))
             {
-                try { config.ServerUrl = new Uri(config.ServerUrl).GetLeftPart(UriPartial.Authority); }
+                try
+                {
+                    // 旧配置里可能残留 user:pass@，WebView2 导航时会忽略凭据并导致来源校验失败。
+                    var uri = new Uri(config.ServerUrl);
+                    config.ServerUrl = uri.Scheme + Uri.SchemeDelimiter + uri.Authority;
+                }
                 catch { config.ServerUrl = ""; }
             }
             return config;
@@ -92,6 +99,7 @@ namespace PiikDesktop
             {
                 var builder = new StringBuilder();
                 builder.Append("{\n  \"serverUrl\": ").Append(SimpleJson.Quote(ServerUrl)).Append(",\n");
+                builder.Append("  \"rememberAuth\": ").Append(RememberAuth ? "true" : "false").Append(",\n");
                 builder.Append("  \"width\": ").Append(Width.ToString(CultureInfo.InvariantCulture)).Append(",\n");
                 builder.Append("  \"height\": ").Append(Height.ToString(CultureInfo.InvariantCulture)).Append(",\n");
                 builder.Append("  \"x\": ").Append(X.ToString(CultureInfo.InvariantCulture)).Append(",\n");
@@ -104,6 +112,12 @@ namespace PiikDesktop
         private static int ToInt(object value, int fallback)
         {
             try { return Convert.ToInt32(value, CultureInfo.InvariantCulture); } catch { return fallback; }
+        }
+
+        private static bool ToBool(object value, bool fallback)
+        {
+            if (value is bool flag) return flag;
+            try { return Convert.ToBoolean(value, CultureInfo.InvariantCulture); } catch { return fallback; }
         }
     }
 

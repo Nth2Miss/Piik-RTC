@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -19,12 +20,30 @@ namespace PiikDesktop
         private ContextMenuStrip _contextMenu;
         private string _serverOrigin = "";
         private bool _showingSetup;
+        private bool _authRequired;
+        private bool _authAttempted;
+        private string _authError = "";
+        private string _authUserName = "";
+        private string _lastAuthUser = "";
+        private string _pendingAuthUser;
+        private string _pendingAuthPassword;
+        private readonly HashSet<string> _autoAuthTried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly bool _debug;
         private FormWindowState _stateBeforeFullscreen = FormWindowState.Normal;
         private FormBorderStyle _borderBeforeFullscreen = FormBorderStyle.Sizable;
 
         public AppConfig Config { get { return _config; } }
         public string ServerUrl { get { return _config.ServerUrl; } }
+
+        private string ServerOrigin
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_config.ServerUrl)) return "";
+                try { return new Uri(_config.ServerUrl).GetLeftPart(UriPartial.Authority); }
+                catch { return ""; }
+            }
+        }
 
         public MainForm(AppConfig config, string[] args)
         {
@@ -100,6 +119,7 @@ namespace PiikDesktop
         {
             _contextMenu = new ContextMenuStrip();
             _contextMenu.Items.Add(new ToolStripMenuItem("服务器设置…", null, (_, __) => ShowSetup("")));
+            _contextMenu.Items.Add(new ToolStripMenuItem("清除保存的登录信息…", null, (_, __) => ForgetCredentials()));
             _contextMenu.Items.Add(new ToolStripMenuItem("重新加载", null, (_, __) =>
             {
                 if (_webView?.CoreWebView2 != null) _webView.CoreWebView2.Reload();
@@ -168,10 +188,18 @@ namespace PiikDesktop
                         ? CoreWebView2PermissionState.Allow
                         : CoreWebView2PermissionState.Deny;
                 };
+                core.BasicAuthenticationRequested += BasicAuthenticationRequested;
                 core.ContainsFullScreenElementChanged += (_, __) => ToggleFullscreen();
                 core.DownloadStarting += DownloadStarting;
                 core.DocumentTitleChanged += (_, __) =>
                 {
+                    if (!_showingSetup)
+                    {
+                        // The server page rendered, so the credentials used for this
+                        // navigation were accepted; allow saved credentials again later.
+                        _authAttempted = false;
+                        _autoAuthTried.Clear();
+                    }
                     Text = _showingSetup ? "Piik-RTC 桌面端" : (string.IsNullOrWhiteSpace(core.DocumentTitle) ? "Piik-RTC" : core.DocumentTitle);
                 };
                 core.ProcessFailed += (_, eventArgs) => Log.Write("webview process failed: " + eventArgs.ProcessFailedKind);
@@ -269,13 +297,147 @@ namespace PiikDesktop
 
         private void NavigationCompleted(CoreWebView2NavigationCompletedEventArgs eventArgs)
         {
-            if (eventArgs.IsSuccess) return;
+            if (eventArgs.IsSuccess)
+            {
+                _authAttempted = false;
+                _autoAuthTried.Clear();
+                return;
+            }
             if (_showingSetup)
             {
                 Log.Write("setup page failed: " + eventArgs.WebErrorStatus);
                 return;
             }
+            if (_authRequired)
+            {
+                _authRequired = false;
+                ShowAuth();
+                return;
+            }
+            // 服务器要求 HTTP 认证时，WebView2 会先以该状态结束导航并等待登录结果，
+            // 此时不能跳回设置页，否则会打断登录。
+            if (eventArgs.WebErrorStatus == CoreWebView2WebErrorStatus.ValidAuthenticationCredentialsRequired)
+            {
+                Log.Write("server requires authentication");
+                return;
+            }
+            if (eventArgs.WebErrorStatus == CoreWebView2WebErrorStatus.ValidProxyAuthenticationRequired)
+            {
+                ShowSetup("代理服务器要求登录，请检查系统代理设置后重试。");
+                return;
+            }
+            Log.Write("navigation failed: " + eventArgs.WebErrorStatus);
             ShowSetup("无法连接服务器：" + eventArgs.WebErrorStatus);
+        }
+
+        private void BasicAuthenticationRequested(object sender, CoreWebView2BasicAuthenticationRequestedEventArgs eventArgs)
+        {
+            var origin = "";
+            try { origin = new Uri(eventArgs.Uri).GetLeftPart(UriPartial.Authority); } catch { }
+            if (origin.Length == 0)
+            {
+                eventArgs.Cancel = true;
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_pendingAuthUser) && string.Equals(origin, ServerOrigin, StringComparison.OrdinalIgnoreCase))
+            {
+                eventArgs.Response.UserName = _pendingAuthUser;
+                eventArgs.Response.Password = _pendingAuthPassword ?? "";
+                _lastAuthUser = _pendingAuthUser;
+                _pendingAuthUser = null;
+                _pendingAuthPassword = null;
+                _authAttempted = true;
+                _autoAuthTried.Add(origin);
+                Log.Write("auth: using submitted credentials for " + origin);
+                return;
+            }
+
+            string savedUser, savedPassword;
+            var saved = CredentialStore.TryGet(origin, out savedUser, out savedPassword);
+            if (saved && !_autoAuthTried.Contains(origin))
+            {
+                _autoAuthTried.Add(origin);
+                eventArgs.Response.UserName = savedUser;
+                eventArgs.Response.Password = savedPassword;
+                _lastAuthUser = savedUser;
+                _authAttempted = true;
+                Log.Write("auth: using saved credentials for " + origin);
+                return;
+            }
+
+            // No usable credentials: cancel this navigation and show the in-app login page.
+            eventArgs.Cancel = true;
+            _authRequired = true;
+            _authError = "";
+            _authUserName = _lastAuthUser;
+            if (saved)
+            {
+                // The saved password no longer works; drop it so future launches prompt directly.
+                CredentialStore.Remove(origin);
+                _authError = "保存的用户名或密码不正确，请重新输入。";
+                _authUserName = savedUser;
+            }
+            else if (_authAttempted)
+            {
+                _authError = "用户名或密码不正确，请重新输入。";
+            }
+            _authAttempted = false;
+            Log.Write("auth: prompting for " + origin);
+        }
+
+        private void ShowAuth()
+        {
+            if (_webView == null || _webView.CoreWebView2 == null) return;
+            try { _bridge?.StopAll(); } catch { }
+            _showingSetup = true;
+            Text = "Piik-RTC 桌面端";
+            var version = Assembly.GetEntryAssembly() != null ? Assembly.GetEntryAssembly().GetName().Version.ToString(3) : "1.0.0";
+            var url = "https://piik.setup/setup.html?mode=auth"
+                + "&host=" + Uri.EscapeDataString(ServerOrigin)
+                + "&user=" + Uri.EscapeDataString(_authUserName ?? "")
+                + "&remember=" + (_config.RememberAuth ? "1" : "0")
+                + "&error=" + Uri.EscapeDataString(_authError ?? "")
+                + "&version=" + Uri.EscapeDataString(version);
+            _authError = "";
+            _webView.CoreWebView2.Navigate(url);
+        }
+
+        public void SubmitAuth(string userName, string password, bool remember)
+        {
+            var origin = ServerOrigin;
+            if (string.IsNullOrEmpty(origin) || string.IsNullOrWhiteSpace(_config.ServerUrl)) return;
+            if (remember != _config.RememberAuth)
+            {
+                _config.RememberAuth = remember;
+                _config.Save();
+            }
+            if (remember) CredentialStore.Save(origin, userName, password);
+            else CredentialStore.Remove(origin);
+            _pendingAuthUser = userName ?? "";
+            _pendingAuthPassword = password ?? "";
+            NavigateServer(_config.ServerUrl);
+        }
+
+        public void CancelAuth()
+        {
+            _pendingAuthUser = null;
+            _pendingAuthPassword = null;
+            ShowSetup("已取消服务器登录，请重新连接并输入用户名和密码。");
+        }
+
+        private void ForgetCredentials()
+        {
+            var origin = "";
+            try { origin = new Uri(_config.ServerUrl).GetLeftPart(UriPartial.Authority); } catch { }
+            if (origin.Length == 0) return;
+            if (MessageBox.Show(this,
+                    "将删除本机保存的服务器登录账号和密码，下次连接时需要重新输入。\n\n确定要清除吗？",
+                    "Piik-RTC", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            CredentialStore.Remove(origin);
+            _autoAuthTried.Remove(origin);
+            MessageBox.Show(this, "已清除保存的登录信息。重新启动程序后，连接服务器时会重新要求登录。",
+                "Piik-RTC", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private static void OpenExternal(string uri)

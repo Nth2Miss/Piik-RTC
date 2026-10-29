@@ -11,6 +11,8 @@ namespace PiikDesktop
     {
         void ShowSetup(string error);
         void NavigateServer(string url);
+        void SubmitAuth(string userName, string password, bool remember);
+        void CancelAuth();
         AppConfig Config { get; }
         string ServerUrl { get; }
     }
@@ -110,7 +112,8 @@ namespace PiikDesktop
             error = null;
             if (IsSetupSource(source))
             {
-                if (type == "setServer" || type == "cancelSetup" || type == "getConfig") return true;
+                if (type == "setServer" || type == "cancelSetup" || type == "getConfig"
+                    || type == "submitAuth" || type == "cancelAuth") return true;
                 error = "设置页不能访问桌面采集功能。";
                 return false;
             }
@@ -180,6 +183,14 @@ namespace PiikDesktop
                 case "cancelSetup":
                     if (string.IsNullOrWhiteSpace(_host.Config.ServerUrl)) return new Dictionary<string, object> { ["ok"] = false };
                     _host.NavigateServer(_host.Config.ServerUrl);
+                    return new Dictionary<string, object> { ["ok"] = true };
+
+                case "submitAuth":
+                    _host.SubmitAuth(GetString(payload, "username"), GetString(payload, "password"), GetBool(payload, "remember"));
+                    return new Dictionary<string, object> { ["ok"] = true };
+
+                case "cancelAuth":
+                    _host.CancelAuth();
                     return new Dictionary<string, object> { ["ok"] = true };
 
                 default:
@@ -449,7 +460,9 @@ namespace PiikDesktop
                 using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) })
                 {
                     var response = await client.GetAsync(url + "/api/config");
-                    if (!response.IsSuccessStatusCode)
+                    // 反向代理开启 HTTP 认证（如 nginx auth_basic）时，不带凭据的探测会拿到 401。
+                    // 地址本身是通的，后续由应用内的登录页处理认证，不能当成地址错误。
+                    if ((int)response.StatusCode != 401 && !response.IsSuccessStatusCode)
                     {
                         return new Dictionary<string, object> { ["ok"] = false, ["message"] = "服务器返回 " + (int)response.StatusCode + "，请检查地址。" };
                     }
@@ -477,7 +490,9 @@ namespace PiikDesktop
             {
                 throw new InvalidOperationException("除本机地址外，请使用 HTTPS 服务器地址。");
             }
-            return uri.GetLeftPart(UriPartial.Authority);
+            // 只保留协议、主机和端口。WebView2 不会使用地址里的 user:pass，
+            // 带用户信息的地址还会让来源校验失败；登录统一交给应用内的登录页。
+            return uri.Scheme + Uri.SchemeDelimiter + uri.Authority;
         }
 
         public void StopAll()

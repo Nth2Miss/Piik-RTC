@@ -100,7 +100,7 @@ console.log(`桌面端版本：${packageVersion || '未知'}`);
 if (embeddedServer) console.log(`内嵌服务端：${embeddedServer}`);
 
 mkdirSync(release, { recursive: true });
-const target = path.join(release, packageVersion ? `Piik-v${packageVersion}.exe` : 'Piik.exe');
+const target = path.join(release, packageVersion ? `Piik-RTC-v${packageVersion}.exe` : 'Piik-RTC.exe');
 writeFileSync(target, readFileSync(hostExe));
 const manifest = path.join(release, 'version.json');
 writeFileSync(manifest, JSON.stringify({ version: packageVersion, exe: path.basename(target) }) + '\n');

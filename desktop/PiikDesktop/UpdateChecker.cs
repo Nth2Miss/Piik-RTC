@@ -104,7 +104,7 @@ namespace PiikDesktop
 
                 var executable = Application.ExecutablePath;
                 var directory = Path.GetDirectoryName(executable) ?? "";
-                var target = Path.Combine(directory, "Piik-v" + release.Version.ToString(3) + ".exe");
+                var target = Path.Combine(directory, "Piik-RTC-v" + release.Version.ToString(3) + ".exe");
                 if (!SamePath(target, executable) && File.Exists(target) && MatchesVersion(target, release.Version))
                 {
                     if (ConfirmRestart(owner, release)) StartUpdateAndExit(target);
@@ -388,8 +388,9 @@ namespace PiikDesktop
             if (release == null || release.Version == null) return;
             var tag = string.IsNullOrWhiteSpace(release.Tag) ? "v" + release.Version.ToString(3) : release.Tag;
             var baseUrl = "https://github.com/" + Owner + "/" + Repository + "/releases/download/" + Uri.EscapeDataString(tag) + "/";
+            AddUnique(release.AssetUrls, baseUrl + "Piik-RTC-v" + release.Version.ToString(3) + ".exe");
+            // Older releases used the Piik-v naming scheme and, before that, Piik.exe.
             AddUnique(release.AssetUrls, baseUrl + "Piik-v" + release.Version.ToString(3) + ".exe");
-            // Releases before the versioned naming scheme used Piik.exe.
             AddUnique(release.AssetUrls, baseUrl + "Piik.exe");
         }
 

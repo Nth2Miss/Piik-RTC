@@ -196,6 +196,8 @@ server {
 }
 ```
 
+如果整站需要访问密码，可以在 `server` 块中加入 `auth_basic` 和 `auth_basic_user_file`。网页端会弹出浏览器登录框，桌面端会在应用窗口内显示登录页，输入代理配置的账号即可；桌面端可以记住密码，且不需要在服务器地址里填写账号密码。
+
 Caddy 会自动处理 WebSocket：
 
 ```caddyfile

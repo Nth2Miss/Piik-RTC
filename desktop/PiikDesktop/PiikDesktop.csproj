@@ -8,6 +8,11 @@
     <PlatformTarget>x64</PlatformTarget>
     <AssemblyName>Piik</AssemblyName>
     <RootNamespace>PiikDesktop</RootNamespace>
+    <AssemblyTitle>Piik-RTC</AssemblyTitle>
+    <Product>Piik-RTC</Product>
+    <Company>Nth2Miss</Company>
+    <Copyright>© 2026 Nth2Miss</Copyright>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationIcon>..\..\public\favicon.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
@@ -26,6 +31,7 @@
     <AssemblyMetadata Include="PiikDefaultServerUrl" Value="$(PiikDefaultServerUrl)" />
   </ItemGroup>
   <ItemGroup>
+    <Reference Include="System.Security" />
     <Reference Include="System.Web.Extensions" />
     <EmbeddedResource Include="Resources\shim.js" LogicalName="Piik.Shim.js" />
     <EmbeddedResource Include="Resources\setup.html" LogicalName="Piik.Setup.html" />
