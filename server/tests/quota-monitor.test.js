@@ -86,6 +86,26 @@ test('即构各档位及自然月分别累计，历史估算保持不变', async
   assert.ok(Math.abs(store.quota('zego', '2026-10').estimated + store.zegoRoundingReserve('2026-10') - 7.1) < 1e-9);
 });
 
+test('批量用量写入共用一个事务，失败时整批回滚', t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  let begins = 0;
+  const exec = store.db.exec.bind(store.db);
+  store.db.exec = sql => { if (sql === 'BEGIN') begins++; return exec(sql); };
+  store.addUsageBatch([
+    {provider:'agora',month:'2026-10',roomId:'a',amount:2},
+    {provider:'zego',month:'2026-10',roomId:'b',amount:7,zegoRate:14,milliseconds:30000},
+  ]);
+  assert.equal(begins, 1);
+  assert.equal(store.db.prepare('SELECT estimated FROM rtc_quota WHERE provider=? AND month=?').get('agora','2026-10').estimated, 2);
+  assert.equal(store.db.prepare('SELECT milliseconds FROM zego_tier_duration WHERE month=? AND rate=?').get('2026-10',14).milliseconds, 30000);
+  assert.throws(() => store.addUsageBatch([
+    {provider:'volc',month:'2026-10',roomId:'rollback',amount:3},
+    {provider:null,month:'2026-10',roomId:'invalid',amount:1},
+  ]));
+  assert.equal(store.db.prepare('SELECT estimated FROM rtc_quota WHERE provider=? AND month=?').get('volc','2026-10'), undefined);
+  assert.equal(store.db.prepare('SELECT estimated FROM rtc_room_usage WHERE provider=? AND roomId=?').get('volc','rollback'), undefined);
+});
+
 test('余额达到 500 分钟保护线时关闭该服务商所有房间', async t => {
   const store = new RoomStore(); t.after(() => store.close());
   const now = Date.parse('2026-10-20T00:00:00Z'); room(store, 'one', 'volc', now); room(store, 'two', 'volc', now); room(store, 'other', 'zego', now);

@@ -75,14 +75,23 @@ export class RoomStore {
     return this.db.prepare('SELECT * FROM rtc_quota WHERE provider=? AND month=?').get(provider, month);
   }
   addUsage(provider, month, roomId, amount) {
-    this.db.prepare('INSERT INTO rtc_quota(provider,month,estimated) VALUES (?,?,?) ON CONFLICT(provider,month) DO UPDATE SET estimated=estimated+excluded.estimated').run(provider, month, amount);
-    this.db.prepare('INSERT INTO rtc_room_usage VALUES (?,?,?,?) ON CONFLICT(provider,month,roomId) DO UPDATE SET estimated=estimated+excluded.estimated').run(provider, month, roomId, amount);
+    this.addUsageBatch([{ provider, month, roomId, amount }]);
   }
   addZegoDuration(month, roomId, rate, milliseconds) {
+    this.addUsageBatch([{ provider:'zego', month, roomId, amount:milliseconds / 60000 * rate, zegoRate:rate, milliseconds }]);
+  }
+  addUsageBatch(entries) {
+    if (!entries.length) return;
+    const quota = this.db.prepare('INSERT INTO rtc_quota(provider,month,estimated) VALUES (?,?,?) ON CONFLICT(provider,month) DO UPDATE SET estimated=estimated+excluded.estimated');
+    const room = this.db.prepare('INSERT INTO rtc_room_usage VALUES (?,?,?,?) ON CONFLICT(provider,month,roomId) DO UPDATE SET estimated=estimated+excluded.estimated');
+    const zego = this.db.prepare('INSERT INTO zego_tier_duration VALUES (?,?,?) ON CONFLICT(month,rate) DO UPDATE SET milliseconds=milliseconds+excluded.milliseconds');
     this.db.exec('BEGIN');
     try {
-      this.db.prepare('INSERT INTO zego_tier_duration VALUES (?,?,?) ON CONFLICT(month,rate) DO UPDATE SET milliseconds=milliseconds+excluded.milliseconds').run(month, rate, milliseconds);
-      this.addUsage('zego', month, roomId, milliseconds / 60000 * rate);
+      for (const entry of entries) {
+        if (entry.zegoRate !== undefined) zego.run(entry.month, entry.zegoRate, entry.milliseconds);
+        quota.run(entry.provider, entry.month, entry.amount);
+        room.run(entry.provider, entry.month, entry.roomId, entry.amount);
+      }
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }

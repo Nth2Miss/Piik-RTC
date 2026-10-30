@@ -43,9 +43,9 @@ export class QuotaMonitor {
   account(at = this.now()) {
     const from = this.last;
     if (at <= from) return;
-    this.last = at;
     const rooms = new Map(this.store.all().map(room => [room.id, room]));
     const members = new Map(), sharers = new Map();
+    const entries = [];
     for (const session of this.sessions.values()) {
       if (!members.has(session.roomId)) members.set(session.roomId, new Map());
       members.get(session.roomId).set(session.uid, session);
@@ -83,12 +83,15 @@ export class QuotaMonitor {
       while (start < end) {
         const stop = Math.min(end, nextMonth(start));
         for (const rate of rates) {
-          if (provider === 'zego') this.store.addZegoDuration(monthOf(start), room.id, rate, stop - start);
-          else this.store.addUsage(provider, monthOf(start), room.id, (stop - start) / 60000 * rate);
+          const month = monthOf(start), milliseconds = stop - start;
+          entries.push({ provider, month, roomId:room.id, amount:milliseconds / 60000 * rate,
+            ...(provider === 'zego' ? { zegoRate:rate, milliseconds } : {}) });
         }
         start = stop;
       }
     }
+    this.store.addUsageBatch(entries);
+    this.last = at;
   }
   project(raw, at = this.now()) {
     this.account(at);

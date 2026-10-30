@@ -1,4 +1,4 @@
-import type { ILocalAudioTrack, ILocalVideoTrack, IRemoteVideoTrack, UID } from 'agora-rtc-sdk-ng';
+import type { ILocalAudioTrack, ILocalVideoTrack, UID } from 'agora-rtc-sdk-ng';
 import { getAgoraSdk } from './agora-sdk';
 import { captureScreen, type CapturedScreen } from './capture';
 import { captureDesktopScreen } from './desktop/capture.ts';
@@ -9,6 +9,7 @@ import { usernameError } from './username';
 import type { Participant, Room, RtcProvider } from './types';
 import { RtcClient } from './rtc-client';
 import type { PlaybackSnapshot } from './playback-stats';
+import type { MediaKind, RtcRemoteUser, VideoTrack } from './rtc/types';
 
 export interface RoomState {
   view: 'welcome' | 'lobby' | 'room';
@@ -25,7 +26,7 @@ export interface RoomState {
   connected: boolean;
   connecting: boolean;
   sharing: boolean;
-  video?: ILocalVideoTrack | IRemoteVideoTrack;
+  video?: VideoTrack;
   connection: string;
   caption: string;
   notice?: { message: string; error: boolean };
@@ -261,7 +262,7 @@ export function createRoomService() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify('诊断信息已导出，可附在问题反馈中。');
   }
-  const source = new SourceController({ client: client as any,
+  const source = new SourceController({ client,
     remote:uid => client.remoteUsers.find(user => user.uid === uid),
     video:video => emit({ video }), empty:() => emit({ video:undefined }),
     error:error => notify(`切换画面失败：${errorText(error)}`, true),
@@ -554,16 +555,16 @@ export function createRoomService() {
   });
   client.on('user-joined', () => { emit(); void heartbeat(); });
   client.on('billing-change', () => emit());
-  client.on('user-published', (user:any, kind:string) => {
+  client.on('user-published', (user:RtcRemoteUser, kind:MediaKind) => {
     if (kind !== 'video' && kind !== 'audio') return;
     if (source.selected === user.uid || (kind === 'video' && source.selected === undefined)) void select(user.uid);
     emit(); void heartbeat();
   });
-  client.on('user-unpublished', (user:any, kind:string) => {
+  client.on('user-unpublished', (user:RtcRemoteUser, kind:MediaKind) => {
     if (source.selected === user.uid) { if (kind === 'video') fallback(); else void select(user.uid); }
     emit();
   });
-  client.on('user-left', (user:any) => { if (source.selected === user.uid) fallback(); emit(); void heartbeat(); });
+  client.on('user-left', (user:RtcRemoteUser) => { if (source.selected === user.uid) fallback(); emit(); void heartbeat(); });
   async function renew() {
     if (!joined || renewing) return; renewing = true;
     try {

@@ -1,9 +1,9 @@
-import type { IAgoraRTCClient, IAgoraRTCRemoteUser, ILocalVideoTrack, IRemoteVideoTrack, UID } from 'agora-rtc-sdk-ng';
-type Video = ILocalVideoTrack | IRemoteVideoTrack;
+import type { ILocalVideoTrack, UID } from 'agora-rtc-sdk-ng';
+import type { AudioTrack, RtcAdapter, RtcRemoteUser, VideoTrack } from './rtc/types';
 type Options = {
-  client: Pick<IAgoraRTCClient, 'subscribe' | 'unsubscribe'>;
-  remote: (uid: UID) => IAgoraRTCRemoteUser | undefined;
-  video: (track: Video) => void;
+  client: Pick<RtcAdapter, 'subscribe' | 'unsubscribe'>;
+  remote: (uid: UID) => RtcRemoteUser | undefined;
+  video: (track: VideoTrack) => void;
   empty: () => void;
   error: (error: unknown) => void;
 };
@@ -13,9 +13,9 @@ export class SourceController {
   selected: UID | undefined;
   private options: Options;
   private local: { uid: UID; track: ILocalVideoTrack } | undefined;
-  private subscribed: IAgoraRTCRemoteUser | undefined;
-  private playing: Video | undefined;
-  private audioPlaying: IAgoraRTCRemoteUser['audioTrack'];
+  private subscribed: RtcRemoteUser | undefined;
+  private playing: VideoTrack | undefined;
+  private audioPlaying: AudioTrack | undefined;
   private revision = 0;
   private chain: Promise<void> = Promise.resolve();
   private volume = 80;
@@ -36,7 +36,7 @@ export class SourceController {
   private applyAudio() {
     this.subscribed?.audioTrack?.setVolume(this.muted ? 0 : this.volume);
   }
-  private async subscribe(user: IAgoraRTCRemoteUser, media: 'video' | 'audio') {
+  private async subscribe(user: RtcRemoteUser, media: 'video' | 'audio') {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([this.options.client.subscribe(user, media), new Promise<never>((_resolve, reject) => {
@@ -44,7 +44,7 @@ export class SourceController {
       })]);
     } finally { clearTimeout(timer); }
   }
-  private async syncAudio(user: IAgoraRTCRemoteUser, revision: number) {
+  private async syncAudio(user: RtcRemoteUser, revision: number) {
     if (!user.hasAudio) {
       this.audioPlaying?.stop(); this.audioPlaying = undefined;
       return;
