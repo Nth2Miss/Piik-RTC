@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import WebSocket from 'ws';
 import { createApp } from '../app.js';
-import { attachRealtime } from '../rooms/realtime.js';
+import { attachRealtime, REALTIME_LIMITS } from '../rooms/realtime.js';
 import { RoomStore } from '../rooms/store.js';
 
 const credentials = { AGORA_APP_ID: 'a'.repeat(32), AGORA_APP_CERTIFICATE: 'b'.repeat(32) };
@@ -36,6 +36,46 @@ function waitFor(socket, predicate, timeout = 3000) {
     socket.on('message', listener);
   });
 }
+async function limitedServer(t, overrides = {}) {
+  const app = createApp({});
+  const server = createServer(app);
+  const realtime = attachRealtime(server, app, {}, {...REALTIME_LIMITS,...overrides});
+  const sockets = [];
+  t.after(async () => {
+    for (const socket of sockets) socket.terminate();
+    realtime.close(); await new Promise(resolve => server.close(resolve)); app.locals.close();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const cookie = (await call(`http://127.0.0.1:${port}`, undefined, '/api/profile', {name:'测试成员'})).cookie;
+  return {port,cookie,connect:async () => { const socket = await connect(port,cookie); sockets.push(socket); return socket; }};
+}
+test('WebSocket 在升级前拒绝未登记身份和超出连接上限的用户', async t => {
+  const server = await limitedServer(t, {perIdentity:1});
+  await assert.rejects(connect(server.port, 'screen_identity=' + 'x'.repeat(32)), /401/);
+  await server.connect();
+  await assert.rejects(server.connect(), /429/);
+});
+test('WebSocket 限制单条消息大小和消息突发频率', async t => {
+  const server = await limitedServer(t, {maxPayload:256,burst:3,messagesPerSecond:0});
+  const oversized = await server.connect();
+  oversized.on('error', () => {});
+  const oversizeClosed = new Promise(resolve => oversized.once('close', resolve));
+  oversized.send('x'.repeat(257));
+  assert.equal(await oversizeClosed, 1009);
+  const noisy = await server.connect();
+  const closed = new Promise(resolve => noisy.once('close', resolve));
+  for (let i = 0; i < 4; i++) noisy.send('{}');
+  await closed;
+  assert.equal(noisy.readyState, WebSocket.CLOSED);
+});
+test('未配置 PUBLIC_ORIGIN 时仍拒绝异站 WebSocket 来源', async t => {
+  const server = await limitedServer(t);
+  await assert.rejects(new Promise((resolve,reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws`, {headers:{Cookie:server.cookie},origin:'https://untrusted.example'});
+    socket.once('open', () => { socket.terminate(); resolve(); }); socket.once('error', reject);
+  }));
+});
 
 test('websocket pushes sharing changes without client polling', async t => {
   const app = createApp(credentials);

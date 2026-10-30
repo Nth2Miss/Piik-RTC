@@ -1,12 +1,14 @@
-import AgoraRTC, { type ILocalAudioTrack, type ILocalVideoTrack, type IRemoteVideoTrack, type UID } from 'agora-rtc-sdk-ng';
+import type { ILocalAudioTrack, ILocalVideoTrack, IRemoteVideoTrack, UID } from 'agora-rtc-sdk-ng';
+import { getAgoraSdk } from './agora-sdk';
 import { captureScreen, type CapturedScreen } from './capture';
 import { captureDesktopScreen } from './desktop/capture.ts';
 import { desktopAudioLabel, type CaptureSelection } from './desktop/bridge.ts';
-import { defaults, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
+import { defaults, effectiveBitrate, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
 import { usernameError } from './username';
 import type { Participant, Room, RtcProvider } from './types';
 import { RtcClient } from './rtc-client';
+import type { PlaybackSnapshot } from './playback-stats';
 
 export interface RoomState {
   view: 'welcome' | 'lobby' | 'room';
@@ -36,6 +38,7 @@ export interface ConnectionSnapshot {
   connected: boolean;
   connecting: boolean;
   connection: string;
+  playback?: PlaybackSnapshot;
   room?: { id: string; isOwner: boolean; members: number };
   network?: { rtt: number; uplinkKbps: number; recvBitrate: number; sendBitrate: number; quality: number };
   local?: {
@@ -66,6 +69,7 @@ export interface DiagnosticsReport {
   };
   preferences: Preferences;
   media: ConnectionSnapshot;
+  mediaHistory: ConnectionSnapshot[];
   rtcStats: unknown;
   localVideoStats: unknown;
   remoteVideoStats: unknown;
@@ -99,6 +103,8 @@ export function createRoomService() {
   let state: RoomState = { view:'welcome', name, configured:false, realtime:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences, providers:{ agora:false, zego:false, volc:false, volc2:false } };
   const listeners = new Set<() => void>();
   const issues: { at:string; kind:string; message:string }[] = [];
+  const mediaHistory: ConnectionSnapshot[] = [];
+  let playback: PlaybackSnapshot | undefined, playbackAt = 0;
   const redact = (value: string) => value
     .replace(/((?:token|sessionKey|inviteKey|appId|password|secret)\s*[=:]\s*)[^\s,;&"']+/gi, '$1[redacted]')
     .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[token]');
@@ -112,7 +118,6 @@ export function createRoomService() {
     recordIssue('unhandled-rejection', reason?.message || String(event.reason));
   });
   const client = new RtcClient();
-  AgoraRTC.setLogLevel(3);
   let joined = false, confirmed = false, attempt = 0, revision = 0, listRevision = 0;
   let sessionKey: string | undefined;
   let participants: Participant[] = [];
@@ -168,6 +173,7 @@ export function createRoomService() {
   function connectionSnapshot(): ConnectionSnapshot {
     const snapshot: ConnectionSnapshot = {
       at:Date.now(), connected:state.connected, connecting:state.connecting, connection:state.connection,
+      playback:Date.now() - playbackAt <= 5000 ? playback : undefined,
       room:state.room ? { id:state.room.id, isOwner:state.room.isOwner, members:state.members.length } : undefined,
     };
     if (!state.connected) return snapshot;
@@ -219,7 +225,7 @@ export function createRoomService() {
     const navigation = navigator as Navigator & { deviceMemory?: number };
     return {
       capturedAt:new Date().toISOString(),
-      app:{ name:'piik-rtc', sdk:state.room?.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${AgoraRTC.VERSION}`, secureContext:window.isSecureContext },
+      app:{ name:'piik-rtc', sdk:!state.room ? '未连接' : state.room.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${getAgoraSdk().VERSION}`, secureContext:window.isSecureContext },
       environment:{
         userAgent:navigator.userAgent, platform:navigator.platform, language:navigator.language,
         languages:[...navigator.languages], hardwareConcurrency:navigator.hardwareConcurrency,
@@ -235,6 +241,7 @@ export function createRoomService() {
       },
       preferences:state.preferences,
       media:connectionSnapshot(),
+      mediaHistory:[...mediaHistory],
       rtcStats:state.connected ? attempt(() => client.getRTCStats(typeof state.selected === 'number' ? state.selected : undefined)) : null,
       localVideoStats:tracks.length ? attempt(() => client.getLocalVideoStats()) : null,
       remoteVideoStats:state.connected ? attempt(() => client.getRemoteVideoStats()) : null,
@@ -470,6 +477,8 @@ export function createRoomService() {
     if (!confirmed || (joined && state.room?.id === room.id)) return;
     if (joined) await leave();
     await client.setProvider(room.provider || 'agora');
+    getAgoraSdk().onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
+    mediaHistory.length = 0; playback = undefined;
     emit({ room });
     try {
       await token(); joined = true; revision++; participants = []; mediaIdle = true; quotaLeaseAt = Date.now();
@@ -510,16 +519,17 @@ export function createRoomService() {
     const isZego = state.room?.provider === 'zego';
     // Zego caps screen sharing at 1080P and 10 Mbps. The desktop picker can
     // offer native/1440P and the settings can exceed 10 Mbps, so clamp here.
+    const requestedBitrate = effectiveBitrate(state.preferences);
     const sharePreferences: Preferences = {
       ...state.preferences,
       ...(isZego && (state.preferences.resolution === '1440' || state.preferences.resolution === 'native') ? { resolution:'1080' as const } : {}),
-      ...(isZego && state.preferences.bitrate > ZEGO_MAX_BITRATE ? { bitrate:ZEGO_MAX_BITRATE } : {}),
+      bitrate:(isZego ? Math.min(requestedBitrate, ZEGO_MAX_BITRATE) : requestedBitrate) as Preferences['bitrate'],
     };
-    if (isZego && state.preferences.bitrate > ZEGO_MAX_BITRATE) notify(`即构共享码率最高为 ${ZEGO_MAX_BITRATE / 1000} Mbps，已按该码率发送。`);
+    if (isZego && requestedBitrate > ZEGO_MAX_BITRATE) notify(`即构共享码率最高为 ${ZEGO_MAX_BITRATE / 1000} Mbps，已按该码率发送。`);
     // Capture first: getDisplayMedia must run while the click's activation is still valid.
     const next = selection
-      ? await captureDesktopScreen(selection, sharePreferences, AgoraRTC, message => notify(message, true))
-      : await captureScreen(sharePreferences, AgoraRTC, undefined, undefined, isZego);
+      ? await captureDesktopScreen(selection, sharePreferences, getAgoraSdk(), message => notify(message, true))
+      : await captureScreen(sharePreferences, getAgoraSdk(), undefined, undefined, isZego);
     const video = next.tracks[0] as ILocalVideoTrack;
     let ended = false;
     next.onEnded(() => { ended = true; if (tracks.includes(video)) void stop(); });
@@ -573,8 +583,12 @@ export function createRoomService() {
   }
   client.on('token-privilege-will-expire', () => void renew());
   client.on('token-privilege-did-expire', () => void renew());
-  AgoraRTC.onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
   const listTimer = setInterval(() => { if (confirmed && !state.busy && !document.hidden) void refreshRooms().catch(() => {}); }, 30000);
+  const statsTimer = setInterval(() => {
+    if (!joined || !state.connected) return;
+    mediaHistory.push(connectionSnapshot());
+    if (mediaHistory.length > 120) mediaHistory.shift();
+  }, 2000);
   // Stream tracks and their received resolution may change without a UI event.
   const mediaReport = setInterval(() => {
     if (!joined || !state.room || !sessionKey || state.room.provider !== 'zego') return;
@@ -601,6 +615,7 @@ export function createRoomService() {
   });
   window.addEventListener('pagehide', () => {
     closeSocket();
+    clearInterval(statsTimer);
     clearInterval(listTimer); clearInterval(mediaReport); clearInterval(quotaWatchdog); clearInterval(heartbeatTimer); clearTimeout(idleTimer); capture?.close();
     if (state.room && sessionKey) navigator.sendBeacon(`/api/rooms/${state.room.id}/leave`, new Blob([JSON.stringify({ sessionKey })], { type:'application/json' }));
     void client.leave();
@@ -665,6 +680,7 @@ export function createRoomService() {
     dismissNotice:() => emit({ notice:undefined }),
     dismissBudgetAlert:() => emit({ budgetAlert:undefined }),
     getConnectionSnapshot: connectionSnapshot,
+    reportPlayback(value: PlaybackSnapshot | undefined) { playback = value; playbackAt = Date.now(); },
     exportDiagnostics,
   };
 }

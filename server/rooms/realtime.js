@@ -6,16 +6,24 @@ const identityPattern = /^[\w-]{32}$/;
 const cookieIdentity = header => header?.split(';').map(part => part.trim())
   .find(part => part.startsWith('screen_identity='))?.slice('screen_identity='.length);
 
-export function attachRealtime(server, app, env = process.env) {
+export const REALTIME_LIMITS = { maxPayload:16 * 1024, maxBuffered:256 * 1024, maxClients:1000, perIp:50, perIdentity:8, burst:30, messagesPerSecond:10 };
+
+export function attachRealtime(server, app, env = process.env, limits = REALTIME_LIMITS) {
   const { sessions, lifecycle, store } = app.locals;
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload:limits.maxPayload });
   const clients = new Set();
   const signatures = new Map();
   let closed = false;
 
-  const originAllowed = origin => !origin || !env.PUBLIC_ORIGIN || origin === env.PUBLIC_ORIGIN;
+  const originAllowed = (origin, host) => {
+    if (!origin) return true;
+    if (env.PUBLIC_ORIGIN) return origin === env.PUBLIC_ORIGIN;
+    try { const url = new URL(origin); return ['http:', 'https:'].includes(url.protocol) && url.host === host; } catch { return false; }
+  };
   const send = (client, payload) => {
     if (closed) return;
+    if (client.ws.readyState !== WebSocket.OPEN) return;
+    if (client.ws.bufferedAmount > limits.maxBuffered) { client.ws.terminate(); return; }
     try { client.ws.send(JSON.stringify(payload)); } catch { /* connection closed */ }
   };
   const roomPayload = (client) => {
@@ -42,14 +50,19 @@ export function attachRealtime(server, app, env = process.env) {
   server.on('upgrade', (request, socket, head) => {
     const path = new URL(request.url, 'http://localhost').pathname;
     if (path !== '/ws') return;
-    if (!originAllowed(request.headers.origin)) return socket.destroy();
+    if (closed || !originAllowed(request.headers.origin, request.headers.host)) return socket.destroy();
+    const identity = cookieIdentity(request.headers.cookie), ip = clientIp(request);
+    const reject = code => { socket.end(`HTTP/1.1 ${code}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
+    if (!identityPattern.test(identity || '') || !store.profile(identity)) return reject('401 Unauthorized');
+    if (clients.size >= limits.maxClients || [...clients].filter(client => client.identity === identity).length >= limits.perIdentity
+      || [...clients].filter(client => client.ip === ip).length >= limits.perIp) return reject('429 Too Many Requests');
     wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request));
   });
 
   wss.on('connection', (ws, request) => {
     const identity = cookieIdentity(request.headers.cookie);
     if (!identityPattern.test(identity || '')) return ws.close(1008, 'unauthorized');
-    const client = { ws, identity, ip:clientIp(request), roomId: undefined, sessionKey: undefined, alive: true };
+    const client = { ws, identity, ip:clientIp(request), roomId: undefined, sessionKey: undefined, alive: true, credits:limits.burst, creditedAt:performance.now() };
     clients.add(client);
 
     ws.on('pong', () => { client.alive = true; });
@@ -57,8 +70,14 @@ export function attachRealtime(server, app, env = process.env) {
     ws.on('close', () => {
       clients.delete(client);
       if (client.roomId) broadcast(client.roomId, true);
+      if (![...clients].some(other => other.roomId === client.roomId)) signatures.delete(client.roomId);
     });
     ws.on('message', raw => {
+      const now = performance.now();
+      client.credits = Math.min(limits.burst, client.credits + (now - client.creditedAt) * limits.messagesPerSecond / 1000);
+      client.creditedAt = now;
+      if (client.credits < 1) { ws.terminate(); return; }
+      client.credits--;
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
       if (message?.type === 'subscribe' && typeof message.roomId === 'string' && typeof message.sessionKey === 'string') {
@@ -81,7 +100,7 @@ export function attachRealtime(server, app, env = process.env) {
       if (message?.type === 'presence' && client.roomId) {
         app.locals.monitor.account();
         const session = sessions.get(client.sessionKey);
-        if (!session || session.roomId !== client.roomId || session.userId !== identity) return;
+        if (!session || session.roomId !== client.roomId || session.userId !== identity || session.expiresAt <= Date.now()) return;
         session.lastSeen = Date.now();
         const sharing = message.sharing === true;
         if (sharing !== session.sharing) {

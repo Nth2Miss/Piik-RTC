@@ -45,6 +45,12 @@ export class QuotaMonitor {
     if (at <= from) return;
     this.last = at;
     const rooms = new Map(this.store.all().map(room => [room.id, room]));
+    const members = new Map(), sharers = new Map();
+    for (const session of this.sessions.values()) {
+      if (!members.has(session.roomId)) members.set(session.roomId, new Map());
+      members.get(session.roomId).set(session.uid, session);
+      if (session.sharing) sharers.set(session.roomId, (sharers.get(session.roomId) || 0) + 1);
+    }
     for (const session of this.sessions.values()) {
       const room = rooms.get(session.roomId);
       if (!room || session.media?.connected === false) continue;
@@ -55,11 +61,11 @@ export class QuotaMonitor {
       const provider = room.provider || 'agora';
       let pixels = 0;
       if (media?.selected && media.selected !== session.uid) {
-        const other = [...this.sessions.values()].find(s => s.roomId === session.roomId && s.uid === media.selected);
+        const other = members.get(session.roomId)?.get(media.selected);
         const width = Math.max(media.width || 0, other?.media?.publishWidth || 0);
         const height = Math.max(media.height || 0, other?.media?.publishHeight || 0);
         pixels = width && height ? width * height : 2560 * 1440;
-      } else if (!media && [...this.sessions.values()].some(s => s.roomId === session.roomId && s.uid !== session.uid && s.sharing)) {
+      } else if (!media && (sharers.get(session.roomId) || 0) > (session.sharing ? 1 : 0)) {
         // Older clients do not report media state; choose a conservative tier.
         pixels = 2560 * 1440;
       }
@@ -67,7 +73,7 @@ export class QuotaMonitor {
       if (provider === 'zego' && Array.isArray(media?.pulls)) {
         rates = media.pulls.filter(pull => pull.uid !== session.uid).map(pull => {
           if (pull.kind === 'audio') return 1;
-          const other = [...this.sessions.values()].find(s => s.roomId === session.roomId && s.uid === pull.uid);
+          const other = members.get(session.roomId)?.get(pull.uid);
           const width = pull.width || other?.media?.publishWidth || 0;
           const height = pull.height || other?.media?.publishHeight || 0;
           return rateFor(provider, width && height ? width * height : 2560 * 1440);

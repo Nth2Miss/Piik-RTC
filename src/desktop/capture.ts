@@ -1,6 +1,6 @@
 import type { IAgoraRTC, ILocalAudioTrack, ILocalVideoTrack } from 'agora-rtc-sdk-ng';
 import type { CapturedScreen } from '../capture.ts';
-import { encoderConfig, type Preferences } from '../preferences.ts';
+import { encoderConfig, videoOptimization, sourceContentHint, type Preferences } from '../preferences.ts';
 import { desktopBridge, type CaptureSelection, type DesktopBridge, type DesktopVideoFrame, type DesktopVideoStartResult } from './bridge.ts';
 import { startProcessAudio, type ProcessAudio } from './audio.ts';
 
@@ -235,11 +235,12 @@ export async function captureDesktopScreen(
 
   try {
     video = await startNativeVideo(bridge, selection, preferences);
+    video.track.contentHint = sourceContentHint(preferences);
     const config = encoderConfig(preferences, { width: video.width, height: video.height });
     const videoTrack = sdk.createCustomVideoTrack({
       mediaStreamTrack: video.track,
       ...config,
-      optimizationMode: preferences.optimization,
+      optimizationMode: videoOptimization(preferences),
     });
     tracks.push(videoTrack);
 

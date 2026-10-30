@@ -1,5 +1,6 @@
-import AgoraRTC from 'agora-rtc-sdk-ng';
-import { encoderConfig, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
+import type { IAgoraRTCClient } from 'agora-rtc-sdk-ng';
+import { loadAgoraSdk } from './agora-sdk';
+import { encoderConfig, effectiveBitrate, videoOptimization, videoContentHint, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import type { RtcProvider } from './types';
 
 type Kind = 'audio' | 'video';
@@ -37,7 +38,11 @@ const packetLossPercent = (value?: number) => {
 export class RtcClient {
   // H.264 is available in desktop Chrome/Edge and usually hardware accelerated,
   // which keeps 1080p screen sharing from saturating the CPU.
-  private agora = AgoraRTC.createClient({ mode:'rtc', codec:'h264' });
+  private agoraClient?: IAgoraRTCClient;
+  private get agora(): IAgoraRTCClient {
+    if (!this.agoraClient) throw new Error('媒体组件尚未初始化。');
+    return this.agoraClient;
+  }
   private provider: 'agora'|'zego'|'volc' = 'agora';
   private engine: any;
   private sdk: any;
@@ -49,7 +54,11 @@ export class RtcClient {
   private volcLocalQuality = 0;
   private volcRemoteQuality = new Map<number, number>();
   private statsCache = new Map<string, { at:number; value:any }>();
-  constructor() {
+  private async initialize() {
+    if (this.agoraClient) return;
+    const sdk = await loadAgoraSdk();
+    if (this.agoraClient) return;
+    this.agoraClient = sdk.createClient({ mode:'rtc', codec:'h264' });
     for (const event of ['connection-state-change', 'user-joined', 'user-published', 'user-unpublished', 'user-left', 'token-privilege-will-expire', 'token-privilege-did-expire']) {
       (this.agora as any).on(event, (...args:any[]) => { if (this.provider === 'agora') this.emit(event, ...args); });
     }
@@ -64,7 +73,7 @@ export class RtcClient {
     this.statsCache.set(key, { at:Date.now(), value });
     return value;
   }
-  get remoteUsers(): any[] { return this.provider === 'agora' ? this.agora.remoteUsers : [...this.remotes.values()]; }
+  get remoteUsers(): any[] { return this.provider === 'agora' ? this.agoraClient?.remoteUsers ?? [] : [...this.remotes.values()]; }
   get zegoPulls() {
     if (this.provider !== 'zego') return undefined;
     return [...this.remotes.values()].filter(user => user.stream).map(user => {
@@ -76,6 +85,7 @@ export class RtcClient {
     });
   }
   async setProvider(provider:RtcProvider) {
+    await this.initialize();
     this.provider = provider === 'volc2' ? 'volc' : provider;
     this.remotes.clear(); this.engine = undefined; this.sdk = undefined;
     this.volcLocalQuality = 0; this.volcRemoteQuality.clear(); this.statsCache.clear();
@@ -139,7 +149,7 @@ export class RtcClient {
     return uid;
   }
   async leave() {
-    if (this.provider === 'agora') return this.agora.leave();
+    if (this.provider === 'agora') return this.agoraClient?.leave();
     const engine = this.engine; this.engine = undefined;
     if (engine) { if (this.provider === 'zego') { engine.logoutRoom(this.room); engine.destroyEngine(); } else { await engine.leaveRoom(); this.sdk.destroyEngine(engine); } }
     this.remotes.clear(); this.volcLocalQuality = 0; this.volcRemoteQuality.clear(); this.statsCache.clear();
@@ -153,8 +163,8 @@ export class RtcClient {
       // custom stream keeps Zego's own publish defaults.
       const stream = await this.engine.createStream({ custom: {
         source:new MediaStream(raw),
-        ...(preferences ? { bitrate:Math.min(preferences.bitrate, ZEGO_MAX_BITRATE), audioBitrate:128,
-          videoOptimizationMode:preferences.optimization === 'motion' ? 'motion' : preferences.optimization === 'detail' ? 'detail' : 'default' } : {}),
+        ...(preferences ? { bitrate:Math.min(effectiveBitrate(preferences), ZEGO_MAX_BITRATE), audioBitrate:128,
+          videoOptimizationMode:videoOptimization(preferences) === 'motion' ? 'motion' : preferences.optimization === 'detail' ? 'detail' : 'default' } : {}),
       } });
       this.zegoLocal = stream;
       if (!this.engine.startPublishingStream(`${this.room}_${this.uid}`, stream)) { this.engine.destroyStream(stream); this.zegoLocal = undefined; throw new Error('即构推流失败。'); }
@@ -164,18 +174,19 @@ export class RtcClient {
       const video = raw.find((t:MediaStreamTrack) => t.kind === 'video');
       if (!video) throw new Error('共享画面缺少视频轨，请重新选择。');
       if (preferences) {
-        const config = encoderConfig(preferences);
         const settings = video.getSettings();
+        const config = encoderConfig(preferences, settings);
         // Without this the engine publishes screen video at its 15 fps,
         // 3000 kbps default regardless of the sharing settings. Use the
         // captured size so non-16:9 windows keep their aspect ratio.
         await this.engine.setScreenEncoderConfig({
-          width:settings.width || config.width, height:settings.height || config.height, frameRate:config.frameRate,
-          maxKbps:preferences.bitrate, contentHint:preferences.optimization === 'motion' ? 'motion' : 'detail',
+          width:config.width, height:config.height, frameRate:config.frameRate,
+          maxKbps:effectiveBitrate(preferences), ...(videoContentHint(preferences) ? { contentHint:videoContentHint(preferences) } : {}),
         });
       }
       await this.engine.setVideoSourceType(index, rtc.VideoSourceType.VIDEO_SOURCE_TYPE_EXTERNAL);
       await this.engine.setExternalVideoTrack(index, video);
+      if (preferences) video.contentHint = videoContentHint(preferences);
       const audio = raw.find((t:MediaStreamTrack) => t.kind === 'audio');
       if (audio) { await this.engine.setAudioSourceType(index, rtc.AudioSourceType.AUDIO_SOURCE_TYPE_EXTERNAL); await this.engine.setExternalAudioTrack(index, audio); }
       await this.engine.publishScreen(audio ? rtc.MediaType.AUDIO_AND_VIDEO : rtc.MediaType.VIDEO);

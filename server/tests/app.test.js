@@ -205,6 +205,22 @@ test('only the creator can edit or manually close a room', async t => {
   await owner(`/api/rooms/${room.id}`, {}, 'DELETE');
   assert.equal((await guest(`/api/rooms/${room.id}/save`, { key: room.inviteKey })).status, 404);
 });
+test('四个服务商的编辑接口都在本地余量达到保护线时拒绝并关闭房间', async t => {
+  const env = {...credentials, ZEGO_APP_ID:'123456', ZEGO_SERVER_SECRET:'s'.repeat(32),
+    VOLC_RTC_APP_ID:'a'.repeat(24), VOLC_RTC_APP_KEY:'first', VOLC_RTC_APP_ID_2:'b'.repeat(24), VOLC_RTC_APP_KEY_2:'second'};
+  const usageService = async () => Object.fromEntries(['agora','zego','volc','volc2'].map(provider => [provider,{status:'ok',remaining:10000}]));
+  const { owner, app } = await server(t, env, {usageService});
+  const month = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 7);
+  for (const provider of ['agora','zego','volc','volc2']) {
+    const room = (await owner('/api/rooms', {name:provider,provider})).data;
+    app.locals.store.addUsage(provider, month, room.id, 9500);
+    const edit = await owner(`/api/rooms/${room.id}`, {name:'不应保存'}, 'PATCH');
+    assert.equal(edit.status, 403, provider);
+    assert.match(edit.data.error, /500 分钟/);
+    assert.equal(app.locals.store.get(room.id), undefined);
+    assert.equal(app.locals.store.getAny(room.id).name, provider);
+  }
+});
 test('presence expires after disconnect and late renewal preserves identity', async t => {
   const { owner, guest } = await server(t);
   const room = (await owner('/api/rooms', { name: '续期测试' })).data;

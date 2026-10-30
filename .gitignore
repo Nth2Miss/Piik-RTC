@@ -18,5 +18,7 @@ desktop/native/**/obj/
 release/
 desktop/PiikDesktop/bin/
 desktop/PiikDesktop/obj/
+desktop/tests/bin/
+desktop/tests/obj/
 desktop/PiikDesktop/Resources/PiikAudio.exe.gz
 desktop/PiikDesktop/FodyWeavers.xsd

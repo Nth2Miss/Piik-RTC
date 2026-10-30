@@ -156,12 +156,17 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     logEvent('创建房间', { ip:clientIp(req), room:roomLabel(room), name:room.name, provider:providerLabel(provider) });
     res.status(201).json(publicRoom(store.get(room.id), req.identity));
   });
-  app.patch('/api/rooms/:id', access, (req, res) => {
+  app.patch('/api/rooms/:id', access, async (req, res) => {
     if (req.room.ownerId !== req.identity) return res.status(403).json({ error: '只有房主可以修改房间。' });
     const fields = roomFields(req.body);
     if (!fields) return res.status(400).json({ error: '请填写有效房间名称和描述。' });
+    const status = await monitor.check();
+    if (status[req.room.provider || 'agora']?.remaining <= QUOTA_RESERVE_MINUTES || !store.get(req.room.id)) {
+      return res.status(403).json({ error: '服务商预计可用时长已达到 500 分钟保护线，房间已关闭。' });
+    }
     store.update(req.room.id, fields.name, fields.description);
     res.json(publicRoom(store.get(req.room.id), req.identity));
+    app.locals.notifyRoom(req.room.id, true);
   });
   app.delete('/api/rooms/:id', access, (req, res) => {
     if (req.room.ownerId !== req.identity) return res.status(403).json({ error: '只有创建者可以关闭房间。' });

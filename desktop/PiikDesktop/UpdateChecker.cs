@@ -33,6 +33,7 @@ namespace PiikDesktop
         public Version Version { get; set; }
         public string Tag { get; set; }
         public List<string> AssetUrls { get; } = new List<string>();
+        public HashSet<string> TrustedDigests { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -102,10 +103,18 @@ namespace PiikDesktop
                     return;
                 }
 
+                // A mirror may announce a version, but only GitHub's authenticated
+                // API can authorize the bytes that will be executed.
+                var verified = await QueryApiAsync("https://api.github.com/repos/" + Owner + "/" + Repository
+                    + "/releases/tags/" + Uri.EscapeDataString(release.Tag), TimeSpan.FromSeconds(15), true);
+                if (verified == null || verified.Version != release.Version || verified.TrustedDigests.Count == 0)
+                    throw new InvalidOperationException("无法从 GitHub 官方接口验证更新文件，请稍后重试或手动下载。不会安装未经验证的镜像文件。");
+                release = verified;
+
                 var executable = Application.ExecutablePath;
                 var directory = Path.GetDirectoryName(executable) ?? "";
                 var target = Path.Combine(directory, "Piik-RTC-v" + release.Version.ToString(3) + ".exe");
-                if (!SamePath(target, executable) && File.Exists(target) && MatchesVersion(target, release.Version))
+                if (!SamePath(target, executable) && File.Exists(target) && MatchesRelease(target, release))
                 {
                     if (ConfirmRestart(owner, release)) StartUpdateAndExit(target);
                     return;
@@ -275,13 +284,13 @@ namespace PiikDesktop
             }
         }
 
-        private static async Task<ReleaseInfo> QueryApiAsync(string url, TimeSpan timeout)
+        private static async Task<ReleaseInfo> QueryApiAsync(string url, TimeSpan timeout, bool trusted = false)
         {
             using (var cancellation = new CancellationTokenSource(timeout))
             using (var request = new HttpRequestMessage(HttpMethod.Get, url))
             {
                 request.Headers.Accept.ParseAdd("application/vnd.github+json");
-                using (var response = await Client.SendAsync(request, cancellation.Token))
+                using (var response = await (trusted ? NoRedirectClient : Client).SendAsync(request, cancellation.Token))
                 {
                     if (!response.IsSuccessStatusCode)
                     {
@@ -303,11 +312,18 @@ namespace PiikDesktop
                             if (asset == null) continue;
                             var name = GetString(asset, "name");
                             var download = GetString(asset, "browser_download_url");
-                            if (!string.IsNullOrWhiteSpace(download) && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                                AddUnique(release.AssetUrls, download);
+                            if (string.IsNullOrWhiteSpace(download) || !name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) continue;
+                            if (trusted)
+                            {
+                                var digest = GetString(asset, "digest");
+                                var prefix = "https://github.com/" + Owner + "/" + Repository + "/releases/download/";
+                                if (!download.StartsWith(prefix, StringComparison.Ordinal) || !Regex.IsMatch(digest, @"\Asha256:[a-fA-F0-9]{64}\z")) continue;
+                                release.TrustedDigests.Add(digest.Substring(7).ToLowerInvariant());
+                            }
+                            AddUnique(release.AssetUrls, download);
                         }
                     }
-                    AddFallbackAssets(release);
+                    if (!trusted) AddFallbackAssets(release);
                     return release;
                 }
             }
@@ -434,7 +450,7 @@ namespace PiikDesktop
 
         private static async Task<string> DownloadAsync(ReleaseInfo release, string target, IProgress<DownloadProgress> progress, CancellationToken token)
         {
-            if (File.Exists(target) && MatchesVersion(target, release.Version))
+            if (File.Exists(target) && MatchesRelease(target, release))
             {
                 progress?.Report(new DownloadProgress(100, 0));
                 return target;
@@ -488,9 +504,9 @@ namespace PiikDesktop
                 else
                     await DownloadSingleAsync(url, temporary, progress, token);
 
-                if (!MatchesVersion(temporary, release.Version))
+                if (!MatchesRelease(temporary, release))
                 {
-                    errors.Add(url + " -> 程序版本不匹配");
+                    errors.Add(url + " -> 程序版本或 SHA-256 校验不匹配");
                     return null;
                 }
 
@@ -748,12 +764,13 @@ namespace PiikDesktop
             progress.Report(new DownloadProgress(percent, (long)(received / seconds)));
         }
 
-        private static bool MatchesVersion(string path, Version expected)
+        private static bool MatchesRelease(string path, ReleaseInfo release)
         {
             try
             {
+                if (!UpdateIntegrity.MatchesFile(path, release.TrustedDigests)) return false;
                 var actual = AssemblyName.GetAssemblyName(path).Version;
-                return Normalize(actual).CompareTo(Normalize(expected)) >= 0;
+                return Normalize(actual).CompareTo(Normalize(release.Version)) == 0;
             }
             catch
             {

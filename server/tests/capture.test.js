@@ -5,7 +5,7 @@ import { defaults, normalizePreferences } from '../../src/preferences.ts';
 
 function fakeCapture(surface, hasAudio = true) {
   const rawVideo = Object.assign(new EventTarget(), { readyState: 'live', stopped: false,
-    getSettings: () => ({ displaySurface: surface }), stop() { this.stopped = true; } });
+    getSettings: () => ({ displaySurface: surface }), applyConstraints: async () => {}, stop() { this.stopped = true; } });
   const rawAudio = { stopped: false, stop() { this.stopped = true; } };
   const stream = { getVideoTracks: () => [rawVideo], getAudioTracks: () => hasAudio ? [rawAudio] : [], getTracks: () => hasAudio ? [rawVideo, rawAudio] : [rawVideo] };
   const created = [];
@@ -87,7 +87,7 @@ test('即构采集限制 1080P，并在无法保证分辨率时释放轨道', as
   fake.rawVideo.applyConstraints = async value => { constraints = value; };
   fake.rawVideo.getSettings = () => ({ displaySurface:'monitor', width:1920, height:1080 });
   const captured = await captureScreen(defaults, fake.sdk, async () => fake.stream, true, true);
-  assert.deepEqual(constraints, {width:{max:1920},height:{max:1080}});
+  assert.deepEqual(constraints, {width:{max:1920},height:{max:1080},frameRate:{ideal:30,max:30}});
   captured.close();
   const oversized = fakeCapture('monitor');
   oversized.rawVideo.applyConstraints = async () => {};
@@ -95,6 +95,30 @@ test('即构采集限制 1080P，并在无法保证分辨率时释放轨道', as
   await assert.rejects(captureScreen(defaults, oversized.sdk, async () => oversized.stream, true, true), /1080P/);
   assert.equal(oversized.rawVideo.stopped, true);
   assert.equal(oversized.rawAudio.stopped, true);
+});
+test('1080p60 均衡采集限制高分屏输入，并向编码器传递流畅策略和实际比例', async () => {
+  const fake = fakeCapture('monitor', false);
+  fake.rawVideo.getSettings = () => ({displaySurface:'monitor',width:3440,height:1440});
+  fake.rawVideo.applyConstraints = async constraints => {
+    assert.deepEqual(constraints, {width:{max:1920},height:{max:1080},frameRate:{ideal:60,max:60}});
+    fake.rawVideo.getSettings = () => ({displaySurface:'monitor',width:1920,height:804,frameRate:60});
+  };
+  const capture = await captureScreen({...defaults, fps:60, optimization:'balanced'}, fake.sdk, async () => fake.stream);
+  assert.equal(fake.rawVideo.contentHint, '');
+  assert.equal(fake.created[0][1].optimizationMode, 'motion');
+  assert.equal(fake.created[0][1].frameRate, 60);
+  assert.equal(fake.created[0][1].height, 804);
+  capture.close();
+});
+test('约束失败释放全部采集轨道，原画仅限制帧率', async () => {
+  const fake = fakeCapture('monitor');
+  fake.rawVideo.applyConstraints = async () => { throw new Error('constraints'); };
+  await assert.rejects(captureScreen(defaults, fake.sdk, async () => fake.stream), /画质/);
+  assert.ok(fake.rawVideo.stopped && fake.rawAudio.stopped);
+  const native = fakeCapture('monitor', false);
+  native.rawVideo.applyConstraints = async constraints => assert.deepEqual(constraints, {frameRate:{ideal:60,max:60}});
+  const capture = await captureScreen({...defaults,resolution:'native',fps:60}, native.sdk, async () => native.stream);
+  capture.close();
 });
 test('older window capture cannot accidentally publish system loopback audio', async () => {
   assert.equal(knownWindowAudioSupport('Mozilla/5.0 Chrome/140.0.0.0'), false);

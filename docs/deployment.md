@@ -364,7 +364,7 @@ Docker 部署时，文件必须位于持久化的 `data/` 目录中，`.env` 里
 - 公网只暴露 HTTPS，反向代理到本机端口；不要直接暴露 `data/` 目录。
 - 定期轮换 RTC AppKey、Access Key 和 ServerSecret；更换 AppKey 不需要清空用量数据。
 - 定期备份 SQLite 数据卷，并对备份做访问控制。
-- 服务端已对 API 做请求限流，但公开大厅仍建议配合反向代理的访问控制、WAF 或供应商额度限制使用。
+- 服务端已对 API 做请求限流，WebSocket 也限制连接数、消息大小（16 KiB）、发送积压和消息频率，但公开大厅仍建议配合反向代理的访问控制、WAF 或供应商额度限制使用。
 - 诊断报告不包含访问令牌，但仍可能包含房间和浏览器信息，分享前请检查内容。
 
 ## 12. 开发与测试
@@ -379,6 +379,7 @@ npm run build
 - 前端：React 19、TypeScript、Vite 7。
 - 后端：Node.js 24、Express 5、内置 SQLite、WebSocket。
 - `npm test` 覆盖房间、权限、媒体状态、用量统计和实时同步逻辑。
+- GitHub Actions 会在 Docker 和桌面发布前运行完整测试与前端构建，防止测试失败时发布。
 - 真实多端共享需要在桌面 Chrome / Edge 上验证。
 
 第三方组件与许可信息见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。

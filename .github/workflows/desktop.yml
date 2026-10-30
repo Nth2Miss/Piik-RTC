@@ -11,7 +11,10 @@ permissions:
   contents: write
 
 jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
   build:
+    needs: checks
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -31,6 +34,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Test update integrity
+        run: dotnet run --project desktop/tests/UpdateIntegrity.Tests.csproj --configuration Release
 
       - name: Read package version
         id: version

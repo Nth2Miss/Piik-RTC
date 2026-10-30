@@ -10,12 +10,13 @@ import { LanguageControl } from './vendor/piik/src/client/components/living/Lang
 import { Glyph, type GlyphName } from './vendor/piik/src/client/ui/icons';
 import { useCopy } from './vendor/piik/src/client/ui/copy';
 import { applyTheme, currentTheme, subscribeTheme } from './vendor/piik/src/client/ui/theme';
-import { defaults, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
+import { automaticBitrate, defaults, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import { inviteUrl, type ConnectionSnapshot, type RoomService, type RoomState } from './room-service';
 import { DesktopCapturePicker } from './desktop/CapturePicker.tsx';
 import { isDesktopApp, type CaptureSelection } from './desktop/bridge.ts';
 import { usernameError } from './username';
 import type { Room, RtcProvider } from './types';
+import { PlaybackSampler } from './playback-stats';
 
 const appVersion = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
 
@@ -122,7 +123,7 @@ function Lobby({ state, service, create, join, remove }: { state:RoomState; serv
     </div><p className="sw-footnote"><Glyph name="clock" size={14}/>房间空置 15 分钟自动关闭 · 每位成员都能同时共享</p>
   </main>;
 }
-function VideoSurface({ state, paused }: { state:RoomState; paused:boolean }) {
+function VideoSurface({ state, paused, service }: { state:RoomState; paused:boolean; service:RoomService }) {
   const ref = useRef<HTMLDivElement>(null);
   const pausedRef = useRef(paused);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
@@ -136,6 +137,18 @@ function VideoSurface({ state, paused }: { state:RoomState; paused:boolean }) {
     return () => container.removeEventListener('pause', holdPause, true);
   }, []);
   useEffect(() => { if (!ref.current || !state.video) return; state.video.play(ref.current, { fit:state.preferences.fit, mirror:false }); return () => { state.video?.stop(); }; }, [state.video, state.preferences.fit]);
+  useEffect(() => {
+    let sampler = new PlaybackSampler(), previous: HTMLVideoElement | null = null;
+    const timer = setInterval(() => {
+      const video = ref.current?.querySelector('video') ?? null;
+      if (video !== previous || !video || video.paused || video.readyState < 2) {
+        sampler = new PlaybackSampler(); previous = video; service.reportPlayback(undefined);
+      }
+      if (!video || video.paused || video.readyState < 2 || typeof video.getVideoPlaybackQuality !== 'function') return;
+      service.reportPlayback(sampler.sample(video.getVideoPlaybackQuality(), performance.now()));
+    }, 2000);
+    return () => { clearInterval(timer); service.reportPlayback(undefined); };
+  }, [state.video, state.preferences.fit, service]);
   useEffect(() => {
     const video = ref.current?.querySelector('video');
     if (!video) return;
@@ -188,7 +201,7 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
   };
   return <main className={`lr-room sw-room${wide ? ' is-wide' : ''}`}><div className="sw-room-heading"><div><h1>{state.room?.name}</h1><p>{state.room?.description || '每个人都可以分享，点击成员切换观看。'}</p></div><span className="sw-count">{state.members.length} 人在线 · {state.members.filter(person => person.sharing).length} 路共享</span></div>
     <div className="lr-scene"><StageTv label="共享画面" live={!!state.video} indicator={<span className={`sw-tv-lamp${state.connected ? ' is-live' : ''}`} aria-label={state.connection}/>}>
-      <VideoSurface state={state} paused={paused}/>{!state.video && <StageOverlay icon={state.connecting ? 'loader' : 'tv'} comic={state.connecting ? 'signal-connecting' : 'waiting-for-host'} waiting={state.connecting} message={state.connecting ? '正在连接媒体…' : selected ? `${selected.name} 暂未共享画面` : '等待大家分享画面'}/>}
+      <VideoSurface state={state} paused={paused} service={service}/>{!state.video && <StageOverlay icon={state.connecting ? 'loader' : 'tv'} comic={state.connecting ? 'signal-connecting' : 'waiting-for-host'} waiting={state.connecting} message={state.connecting ? '正在连接媒体…' : selected ? `${selected.name} 暂未共享画面` : '等待大家分享画面'}/>}
       <div className="sw-playback"><span className="sw-watching">{state.video ? `${paused ? '已暂停' : '正在观看'} · ${selected?.name || '共享画面'}${state.selected === state.uid ? '（你）' : ''}` : '选择下方成员，切换共享画面'}</span><div className="sw-playback-tools">
         <Btn icon={paused ? 'play' : 'pause'} title={paused ? 'playback.play' : 'playback.pause'} size="dense" quiet pressed={paused} disabled={!state.video} onClick={() => { const next = !paused; setPaused(next); service.setPlaybackPaused(next); }}/>
         <Btn icon={state.preferences.muted ? 'speakerOff' : 'speaker'} title={state.preferences.muted ? 'playback.unmute' : 'playback.mute'} size="dense" quiet onClick={() => service.savePreferences({ ...state.preferences,muted:!state.preferences.muted })}/>
@@ -227,7 +240,8 @@ function ConnectionDetails({ state, service, close }: { state:RoomState; service
     <div className="sw-connection-grid">
       <section className="sw-connection-card"><h3><Glyph name="display"/>本机采集</h3>{local ? <dl>
         <dt>分辨率</dt><dd>{formatSize(local.width, local.height)}</dd>
-        <dt>帧率</dt><dd>{formatFps(local.sendFrameRate || local.captureFrameRate)}</dd>
+        <dt>采集帧率</dt><dd>{formatFps(local.captureFrameRate)}</dd>
+        <dt>发送帧率</dt><dd>{formatFps(local.sendFrameRate)}</dd>
         <dt>视频编码</dt><dd>{local.codec || '—'}</dd>
         <dt>发送码率</dt><dd>{formatBitrate(local.sendBitrate)}{local.targetBitrate > 0 ? ` / ${formatBitrate(local.targetBitrate)}` : ''}</dd>
         <dt>来源声音</dt><dd>{local.hasAudio ? '已包含' : '未包含'}</dd>
@@ -236,7 +250,9 @@ function ConnectionDetails({ state, service, close }: { state:RoomState; service
       <section className="sw-connection-card"><h3><Glyph name="eye"/>当前观看</h3>{remote ? <dl>
         <dt>成员</dt><dd>{remote.name}</dd>
         <dt>分辨率</dt><dd>{formatSize(remote.width, remote.height)}</dd>
-        <dt>帧率</dt><dd>{formatFps(remote.receiveFrameRate || remote.decodeFrameRate)}</dd>
+        <dt>接收 / 解码帧率</dt><dd>{formatFps(remote.receiveFrameRate)} / {formatFps(remote.decodeFrameRate)}</dd>
+        <dt>实际播放帧率</dt><dd>{formatFps(snapshot.playback?.fps)}</dd>
+        <dt>本次采样播放丢帧</dt><dd>{snapshot.playback ? `${snapshot.playback.dropped} / ${snapshot.playback.total}（${formatPercent(snapshot.playback.droppedPercent)}）` : '—'}</dd>
         <dt>视频编码</dt><dd>{remote.codec || '—'}</dd>
         <dt>接收码率</dt><dd>{formatBitrate(remote.receiveBitrate)}</dd>
         <dt>丢包率</dt><dd>{formatPercent(remote.packetLossRate)}</dd>
@@ -268,14 +284,15 @@ function Settings({ state, service, close }: { state:RoomState; service:RoomServ
   });
   const change = (patch:Partial<Preferences>, immediate = false) => { setDraft(previous => ({ ...previous,...patch })); if (immediate) service.savePreferences({ ...state.preferences,...patch }); };
   const presets:[string,Preferences['resolution'],Preferences['fps'],Preferences['bitrate']][] = [['轻量','720',30,3000],['高清','1080',30,5000],['高帧率','1080',60,8000]];
-  const presetNodes = <div className="lr-tiles">{presets.map(([title,resolution,fps,bitrate]) => <button type="button" key={title} className={`lr-tile${draft.resolution === resolution && draft.fps === fps && draft.bitrate === bitrate ? ' is-selected' : ''}`} aria-pressed={draft.resolution === resolution && draft.fps === fps && draft.bitrate === bitrate} onClick={() => change({ resolution,fps,bitrate })}><QualityTileGlyph resolution={`${resolution}p`} framerate={fps}/><strong>{title}</strong><small>{resolution}p {fps} 帧</small></button>)}</div>;
+  const presetNodes = <div className="lr-tiles">{presets.map(([title,resolution,fps,bitrate]) => <button type="button" key={title} className={`lr-tile${draft.bitrateMode === 'auto' && draft.resolution === resolution && draft.fps === fps ? ' is-selected' : ''}`} aria-pressed={draft.bitrateMode === 'auto' && draft.resolution === resolution && draft.fps === fps} onClick={() => change({ resolution,fps,bitrate,bitrateMode:'auto' })}><QualityTileGlyph resolution={`${resolution}p`} framerate={fps}/><strong>{title}</strong><small>{resolution}p {fps} 帧</small></button>)}</div>;
   const resolutionOptions = ([['480','480p'],['720','720p'],['1080','1080p'],['1440','1440p'],...(isDesktopApp ? [['native','原画'] as [Preferences['resolution'],string]] : [])] as [Preferences['resolution'],string][]).filter(([value]) => !isZego || (value !== '1440' && value !== 'native'));
-  const bitrateOptions = ([1000,2000,3000,5000,8000,10000,12000,16000] as const)
+  const autoBitrate = Math.min(automaticBitrate(draft), isZego ? ZEGO_MAX_BITRATE : 16000) as Preferences['bitrate'];
+  const bitrateOptions:[Preferences['bitrate'] | 'auto',string][] = [['auto','自动（推荐）'], ...([1000,2000,3000,5000,8000,10000,12000,16000] as const)
     .filter(value => !isZego || value <= ZEGO_MAX_BITRATE)
-    .map(value => [value, `${value/1000} Mbps`] as [Preferences['bitrate'], string]);
-  return <Modal title="共享与观看设置" close={close} wide><SharingSettings id="sharing-options" open presets={presetNodes} pictureSummary={<span className="lr-sharing-picture-summary"><span>{draft.resolution === 'native' ? '原画' : `${draft.resolution}p`}</span><span>{draft.fps} fps</span><span>{draft.bitrate/1000} Mbps</span></span>} picture={<>
+    .map(value => [value, `${value/1000} Mbps`] as [Preferences['bitrate'], string])];
+  return <Modal title="共享与观看设置" close={close} wide><SharingSettings id="sharing-options" open presets={presetNodes} pictureSummary={<span className="lr-sharing-picture-summary"><span>{draft.resolution === 'native' ? '原画' : `${draft.resolution}p`}</span><span>{draft.fps} fps</span><span>{draft.bitrateMode === 'auto' ? `自动 ${autoBitrate/1000} Mbps` : `${draft.bitrate/1000} Mbps`}</span></span>} picture={<>
     <Choices label="目标分辨率" options={resolutionOptions} value={draft.resolution} onChange={resolution => change({ resolution })}/>{isZego && <p className="sw-settings-note">即构共享画面最高为 1080P，码率最高为 10 Mbps。</p>}
-    <div className="lr-sharing-limits"><Choices label="目标帧率" options={([15,24,30,60] as const).map(value => [value,`${value} fps`])} value={draft.fps} onChange={fps => change({ fps })}/><Choices label="最大视频码率" options={bitrateOptions} value={draft.bitrate} onChange={bitrate => change({ bitrate })}/></div>
+    <div className="lr-sharing-limits"><Choices label="目标帧率" options={([15,24,30,60] as const).map(value => [value,`${value} fps`])} value={draft.fps} onChange={fps => change({ fps })}/><Choices label="最大视频码率" options={bitrateOptions} value={draft.bitrateMode === 'auto' ? 'auto' : draft.bitrate} onChange={value => change(value === 'auto' ? { bitrateMode:'auto',bitrate:autoBitrate } : { bitrateMode:'manual',bitrate:value })}/></div>
     <Choices label="弱网优化" options={[["detail","清晰优先"],["balanced","均衡"],["motion","流畅优先"]]} value={draft.optimization} onChange={optimization => change({ optimization })}/>
     <Choices label="观看画面适配" options={[["contain","完整显示"],["cover","填满画面"],["fill","拉伸铺满"]]} value={draft.fit} onChange={fit => change({ fit },true)}/>
   </>} audio={<>
