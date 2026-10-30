@@ -1,5 +1,28 @@
-import type { IAgoraRTC, ILocalVideoTrack, ILocalAudioTrack } from 'agora-rtc-sdk-ng';
+import type { IAgoraRTC } from 'agora-rtc-sdk-ng';
 import { encoderConfig, videoOptimization, sourceContentHint, type Preferences } from './preferences.ts';
+import { browserVideoTrack } from './rtc/browser.ts';
+import type { LocalTrack, LocalVideoTrack } from './rtc/types.ts';
+
+export interface CaptureTrackFactory {
+  createCustomVideoTrack(config: Parameters<IAgoraRTC['createCustomVideoTrack']>[0]): LocalVideoTrack;
+  createCustomAudioTrack(config: Parameters<IAgoraRTC['createCustomAudioTrack']>[0]): LocalTrack;
+}
+// Non-Agora adapters publish the native tracks directly and apply their own encoder settings.
+export const browserCaptureTracks: CaptureTrackFactory = {
+  createCustomVideoTrack({ mediaStreamTrack:track }) {
+    const preview = browserVideoTrack(track);
+    return {
+      trackMediaType:'video', get enabled() { return track.enabled; }, getMediaStreamTrack:() => track,
+      play:preview.play, stop:preview.stop, close:() => { preview.stop(); track.stop(); },
+    };
+  },
+  createCustomAudioTrack({ mediaStreamTrack:track }) {
+    return {
+      trackMediaType:'audio', get enabled() { return track.enabled; }, getMediaStreamTrack:() => track,
+      stop() {}, close:() => track.stop(),
+    };
+  },
+};
 
 export function displayOptions(p: Preferences) {
   const { width, height } = encoderConfig(p);
@@ -15,7 +38,7 @@ export function displayOptions(p: Preferences) {
   };
 }
 export interface CapturedScreen {
-  tracks: (ILocalVideoTrack | ILocalAudioTrack)[];
+  tracks: LocalTrack[];
   surface: string;
   hasAudio: boolean;
   onEnded: (callback: () => void) => void;
@@ -29,14 +52,14 @@ export function knownWindowAudioSupport(userAgent: string): boolean {
 }
 export async function captureScreen(
   p: Preferences,
-  sdk: Pick<IAgoraRTC, 'createCustomVideoTrack' | 'createCustomAudioTrack'>,
+  sdk: CaptureTrackFactory,
   acquire: (options: ReturnType<typeof displayOptions>) => Promise<MediaStream> = options => navigator.mediaDevices.getDisplayMedia(options as DisplayMediaStreamOptions),
   windowAudioSupported = knownWindowAudioSupport(typeof navigator === 'undefined' ? '' : navigator.userAgent),
   max1080 = false,
 ): Promise<CapturedScreen> {
   // Call immediately from the share button, before any await that could lose activation.
   const stream = await acquire(displayOptions(p));
-  const tracks: (ILocalVideoTrack | ILocalAudioTrack)[] = [];
+  const tracks: LocalTrack[] = [];
   try {
     const rawVideo = stream.getVideoTracks()[0];
     if (!rawVideo) throw new Error('浏览器没有返回共享画面，请重新选择。');

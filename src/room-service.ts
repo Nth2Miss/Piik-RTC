@@ -1,6 +1,6 @@
-import type { ILocalAudioTrack, ILocalVideoTrack, UID } from 'agora-rtc-sdk-ng';
+import type { UID } from 'agora-rtc-sdk-ng';
 import { getAgoraSdk } from './agora-sdk';
-import { captureScreen, type CapturedScreen } from './capture';
+import { browserCaptureTracks, captureScreen, type CapturedScreen } from './capture';
 import { captureDesktopScreen } from './desktop/capture.ts';
 import { desktopAudioLabel, type CaptureSelection } from './desktop/bridge.ts';
 import { defaults, effectiveBitrate, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
@@ -9,7 +9,7 @@ import { usernameError } from './username';
 import type { Participant, Room, RtcProvider } from './types';
 import { RtcClient } from './rtc-client';
 import type { PlaybackSnapshot } from './playback-stats';
-import type { MediaKind, RtcRemoteUser, VideoTrack } from './rtc/types';
+import type { LocalTrack, LocalVideoTrack, MediaKind, RtcRemoteUser, VideoTrack } from './rtc/types';
 
 export interface RoomState {
   view: 'welcome' | 'lobby' | 'room';
@@ -122,7 +122,7 @@ export function createRoomService() {
   let joined = false, confirmed = false, attempt = 0, revision = 0, listRevision = 0;
   let sessionKey: string | undefined;
   let participants: Participant[] = [];
-  let tracks: (ILocalAudioTrack | ILocalVideoTrack)[] = [];
+  let tracks: LocalTrack[] = [];
   let capture: CapturedScreen | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let heartbeatPending = false, renewing = false;
@@ -478,7 +478,7 @@ export function createRoomService() {
     if (!confirmed || (joined && state.room?.id === room.id)) return;
     if (joined) await leave();
     await client.setProvider(room.provider || 'agora');
-    getAgoraSdk().onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
+    if ((room.provider || 'agora') === 'agora') getAgoraSdk().onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
     mediaHistory.length = 0; playback = undefined;
     emit({ room });
     try {
@@ -528,10 +528,11 @@ export function createRoomService() {
     };
     if (isZego && requestedBitrate > ZEGO_MAX_BITRATE) notify(`即构共享码率最高为 ${ZEGO_MAX_BITRATE / 1000} Mbps，已按该码率发送。`);
     // Capture first: getDisplayMedia must run while the click's activation is still valid.
+    const captureTracks = (state.room?.provider || 'agora') === 'agora' ? getAgoraSdk() : browserCaptureTracks;
     const next = selection
-      ? await captureDesktopScreen(selection, sharePreferences, getAgoraSdk(), message => notify(message, true))
-      : await captureScreen(sharePreferences, getAgoraSdk(), undefined, undefined, isZego);
-    const video = next.tracks[0] as ILocalVideoTrack;
+      ? await captureDesktopScreen(selection, sharePreferences, captureTracks, message => notify(message, true))
+      : await captureScreen(sharePreferences, captureTracks, undefined, undefined, isZego);
+    const video = next.tracks[0] as LocalVideoTrack;
     let ended = false;
     next.onEnded(() => { ended = true; if (tracks.includes(video)) void stop(); });
     try {

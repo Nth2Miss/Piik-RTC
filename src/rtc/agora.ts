@@ -1,4 +1,4 @@
-import type { IAgoraRTCClient, IAgoraRTCRemoteUser, UID } from 'agora-rtc-sdk-ng';
+import type { IAgoraRTCClient, IAgoraRTCRemoteUser, ILocalAudioTrack, ILocalVideoTrack, UID } from 'agora-rtc-sdk-ng';
 import { loadAgoraSdk } from '../agora-sdk';
 import type { LocalTrack, MediaKind, RtcAdapter, RtcEventSink, RtcRemoteUser } from './types';
 
@@ -23,8 +23,8 @@ export class AgoraRtcAdapter implements RtcAdapter {
     return this.client.join(String(appId), room, token, uid);
   }
   async leave() { await this.client.leave(); }
-  async publish(tracks: LocalTrack[]) { await this.client.publish(tracks); }
-  async unpublish(tracks: LocalTrack[]) { await this.client.unpublish(tracks); }
+  async publish(tracks: LocalTrack[]) { await this.client.publish(tracks as (ILocalAudioTrack | ILocalVideoTrack)[]); }
+  async unpublish(tracks: LocalTrack[]) { await this.client.unpublish(tracks as (ILocalAudioTrack | ILocalVideoTrack)[]); }
   async subscribe(user: RtcRemoteUser, kind: MediaKind) {
     await this.client.subscribe(user as IAgoraRTCRemoteUser, kind);
   }

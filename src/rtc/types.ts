@@ -2,7 +2,6 @@ import type { ILocalAudioTrack, ILocalVideoTrack, IRemoteAudioTrack, IRemoteVide
 import type { Preferences } from '../preferences';
 
 export type MediaKind = 'audio' | 'video';
-export type LocalTrack = ILocalAudioTrack | ILocalVideoTrack;
 export interface BrowserVideoTrack {
   play(container: HTMLElement, options?: { fit?: string; mirror?: boolean }): void;
   stop(): void;
@@ -12,7 +11,18 @@ export interface BrowserAudioTrack {
   play(): void;
   stop(): void;
 }
-export type VideoTrack = ILocalVideoTrack | IRemoteVideoTrack | BrowserVideoTrack;
+export interface BrowserLocalTrack {
+  readonly trackMediaType: MediaKind;
+  readonly enabled: boolean;
+  getMediaStreamTrack(): MediaStreamTrack;
+  stop(): void;
+  close(): void;
+}
+export interface BrowserLocalVideoTrack extends BrowserLocalTrack, BrowserVideoTrack { readonly trackMediaType: 'video'; }
+export interface BrowserLocalAudioTrack extends BrowserLocalTrack { readonly trackMediaType: 'audio'; }
+export type LocalTrack = ILocalAudioTrack | ILocalVideoTrack | BrowserLocalAudioTrack | BrowserLocalVideoTrack;
+export type LocalVideoTrack = ILocalVideoTrack | BrowserLocalVideoTrack;
+export type VideoTrack = LocalVideoTrack | IRemoteVideoTrack | BrowserVideoTrack;
 export type AudioTrack = IRemoteAudioTrack | BrowserAudioTrack;
 export interface RtcRemoteUser {
   uid: UID;

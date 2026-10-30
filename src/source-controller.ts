@@ -1,5 +1,5 @@
-import type { ILocalVideoTrack, UID } from 'agora-rtc-sdk-ng';
-import type { AudioTrack, RtcAdapter, RtcRemoteUser, VideoTrack } from './rtc/types';
+import type { UID } from 'agora-rtc-sdk-ng';
+import type { AudioTrack, LocalVideoTrack, RtcAdapter, RtcRemoteUser, VideoTrack } from './rtc/types';
 type Options = {
   client: Pick<RtcAdapter, 'subscribe' | 'unsubscribe'>;
   remote: (uid: UID) => RtcRemoteUser | undefined;
@@ -12,7 +12,7 @@ type Options = {
 export class SourceController {
   selected: UID | undefined;
   private options: Options;
-  private local: { uid: UID; track: ILocalVideoTrack } | undefined;
+  private local: { uid: UID; track: LocalVideoTrack } | undefined;
   private subscribed: RtcRemoteUser | undefined;
   private playing: VideoTrack | undefined;
   private audioPlaying: AudioTrack | undefined;
@@ -22,7 +22,7 @@ export class SourceController {
   private muted = false;
   private paused = false;
   constructor(options: Options) { this.options = options; }
-  setLocal(uid: UID, track?: ILocalVideoTrack) { this.local = track ? { uid, track } : undefined; }
+  setLocal(uid: UID, track?: LocalVideoTrack) { this.local = track ? { uid, track } : undefined; }
   setAudio(volume: number, muted: boolean) {
     this.volume = volume; this.muted = muted; this.applyAudio();
   }

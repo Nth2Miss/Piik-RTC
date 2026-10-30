@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { captureScreen, displayOptions, knownWindowAudioSupport } from '../../src/capture.ts';
+import { browserCaptureTracks, captureScreen, displayOptions, knownWindowAudioSupport } from '../../src/capture.ts';
 import { defaults, normalizePreferences } from '../../src/preferences.ts';
 
 function fakeCapture(surface, hasAudio = true) {
@@ -130,4 +130,15 @@ test('older window capture cannot accidentally publish system loopback audio', a
   const tab = fakeCapture('browser');
   const tabCapture = await captureScreen(defaults, tab.sdk, async () => tab.stream, false);
   assert.equal(tabCapture.hasAudio, true); tabCapture.close();
+});
+test('非声网采集直接封装原生媒体轨，不依赖声网 SDK', async () => {
+  const fake = fakeCapture('monitor');
+  const capture = await captureScreen(defaults, browserCaptureTracks, async () => fake.stream);
+  assert.equal(capture.hasAudio, true);
+  assert.equal(capture.tracks[0].trackMediaType, 'video');
+  assert.equal(capture.tracks[0].getMediaStreamTrack(), fake.rawVideo);
+  assert.equal(capture.tracks[1].getMediaStreamTrack(), fake.rawAudio);
+  capture.close();
+  assert.equal(fake.rawVideo.stopped, true);
+  assert.equal(fake.rawAudio.stopped, true);
 });

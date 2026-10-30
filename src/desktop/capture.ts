@@ -1,6 +1,6 @@
-import type { IAgoraRTC, ILocalAudioTrack, ILocalVideoTrack } from 'agora-rtc-sdk-ng';
-import type { CapturedScreen } from '../capture.ts';
+import type { CaptureTrackFactory, CapturedScreen } from '../capture.ts';
 import { encoderConfig, videoOptimization, sourceContentHint, type Preferences } from '../preferences.ts';
+import type { LocalTrack } from '../rtc/types.ts';
 import { desktopBridge, type CaptureSelection, type DesktopBridge, type DesktopVideoFrame, type DesktopVideoStartResult } from './bridge.ts';
 import { startProcessAudio, type ProcessAudio } from './audio.ts';
 
@@ -222,13 +222,13 @@ async function startDesktopAudio(
 export async function captureDesktopScreen(
   selection: CaptureSelection,
   preferences: Preferences,
-  sdk: Pick<IAgoraRTC, 'createCustomVideoTrack' | 'createCustomAudioTrack'>,
+  sdk: CaptureTrackFactory,
   onWarning: (message: string) => void,
 ): Promise<CapturedScreen> {
   const bridge = desktopBridge;
   if (!bridge) throw new Error('桌面采集组件不可用。');
 
-  const tracks: (ILocalVideoTrack | ILocalAudioTrack)[] = [];
+  const tracks: LocalTrack[] = [];
   let video: NativeVideo | undefined;
   let audio: ProcessAudio | undefined;
   let closed = false;
