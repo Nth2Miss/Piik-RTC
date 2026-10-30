@@ -2,6 +2,13 @@ name: Desktop
 
 on:
   workflow_dispatch:
+    inputs:
+      build_label:
+        description: 构建说明（可选，用于区分运行记录）
+        required: false
+        type: string
+
+run-name: Desktop · ${{ inputs.build_label || github.ref_name }} · #${{ github.run_number }}
 
 concurrency:
   group: desktop-${{ github.ref }}

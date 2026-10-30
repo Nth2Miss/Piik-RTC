@@ -379,7 +379,7 @@ npm run build
 - 前端：React 19、TypeScript、Vite 7。
 - 后端：Node.js 24、Express 5、内置 SQLite、WebSocket。
 - `npm test` 覆盖房间、权限、媒体状态、用量统计和实时同步逻辑。
-- GitHub Actions 会在 Docker 和桌面发布前运行完整测试与前端构建，防止测试失败时发布。
+- GitHub Actions 会在 Docker 和桌面发布前调用 `Verify`，运行完整测试与前端构建，防止测试失败时发布；该检查仅在被发布工作流调用时运行，不在 push/PR 后重复执行。
 - 真实多端共享需要在桌面 Chrome / Edge 上验证。
 
 第三方组件与许可信息见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。

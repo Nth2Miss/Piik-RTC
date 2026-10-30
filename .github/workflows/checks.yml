@@ -1,16 +1,13 @@
-name: Checks
+name: Verify
 
 on:
-  pull_request:
-  push:
-    branches: [master, main]
   workflow_call:
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
