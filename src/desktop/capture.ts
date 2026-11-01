@@ -47,6 +47,25 @@ function createCanvasVideoTrack(preferences: Preferences, width: number, height:
   return { canvas, context, track, requestFrame };
 }
 
+function relaxNativeTrack(track: MediaStreamTrack, width: number, height: number, fps: number) {
+  // RTC SDKs apply width/height/frameRate constraints while configuring a
+  // custom track. MediaStreamTrackGenerator rejects those constraints, which
+  // surfaces as OverconstrainedError even though the host already produces
+  // frames at this size and pace. Acknowledge them instead of failing.
+  try {
+    Object.defineProperty(track, 'applyConstraints', {
+      configurable: true,
+      value: () => Promise.resolve(),
+    });
+  } catch { /* keep the native implementation */ }
+  try {
+    Object.defineProperty(track, 'getSettings', {
+      configurable: true,
+      value: () => ({ width, height, frameRate:fps }),
+    });
+  } catch { /* keep the native implementation */ }
+}
+
 /** The native host sends raw BGRA frames, with JPEG as the fallback. */
 async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelection, preferences: Preferences): Promise<NativeVideo> {
   const native = preferences.resolution === 'native';
@@ -109,6 +128,7 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
       throw error;
     }
   }
+  relaxNativeTrack(track, width, height, preferences.fps);
 
   let stopped = false;
   let frameSink: ((frame: DesktopVideoFrame) => void) | null = null;
