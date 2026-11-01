@@ -87,6 +87,10 @@ export function errorText(error: unknown) {
   if (e.name === 'TimeoutError') return '请求超时，请检查网络或稍后重试。';
   return e.message || e.msg || '连接失败，请稍后重试。';
 }
+/** Volc's first screen publish can get stuck: either no frames leave the
+ *  encoder at all, or it steps the resolution down while barely sending. */
+const firstShareDegraded = (width: number, fps: number, targetWidth: number) =>
+  !width || fps < 2 || (width < targetWidth * 0.9 && fps < 10);
 async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
   const response = await fetch(url, { method: method || (body === undefined ? 'GET' : 'POST'),
     headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
@@ -568,10 +572,10 @@ export function createRoomService() {
       const resolution = sharePreferences.resolution === 'native' ? '原画' : `${sharePreferences.resolution}p`;
       emit({ caption:`${resolution} · ${sharePreferences.fps} fps · ${audioLabel}，切换观看会保留你的共享。` });
       if (!selection && state.preferences.audio && !next.hasAudio) notify(`未获得${sourceAudio}音轨，本次仅共享画面。请在浏览器选择器中勾选共享音频。`);
-      if (!retry && selection && state.room?.provider === 'volc') {
-        // Volc's first screen publish after joining can stay on its low
-        // resolution ladder. Re-running stop/share recreates the capture and
-        // MediaStreamTrackGenerator, which is the same path as the user's
+      if (!retry && selection && client.firstShareNeedsRetry) {
+        // The provider's first screen publish after joining can stay on its
+        // low resolution ladder. Re-running stop/share recreates the capture
+        // and MediaStreamTrackGenerator, which is the same path as the user's
         // manual second share. Retry once, and only while both resolution and
         // frame rate are clearly below the selected profile.
         const targetWidth = Number(encoderConfig(sharePreferences, { width:next.width, height:next.height }).width) || 1920;
@@ -583,12 +587,10 @@ export function createRoomService() {
             try { stats = client.getLocalVideoStats(); } catch { return; }
             const width = Number(stats?.sendResolutionWidth) || 0;
             const fps = Number(stats?.sendFrameRate) || 0;
-            // Retry when no frames are being sent at all, or when Volc has
-            // already stepped the resolution down at a very low frame rate.
-            if (!width || (fps >= 2 && (width >= targetWidth * 0.9 || fps >= 10))) return;
+            if (!firstShareDegraded(width, fps, targetWidth)) return;
             await stop();
             await share(selection, true);
-          })().catch(() => { /* keep the manual share button available */ });
+          })().catch(() => notify('首次共享自动恢复失败，请手动重新共享。', true));
         }, 2500);
       }
       void heartbeat();

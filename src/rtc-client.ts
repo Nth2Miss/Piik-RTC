@@ -27,6 +27,7 @@ export class RtcClient {
   }
   get remoteUsers(): RtcRemoteUser[] { return this.adapter?.remoteUsers ?? []; }
   get zegoPulls() { return this.adapter?.zegoPulls; }
+  get firstShareNeedsRetry() { return this.adapter?.firstShareNeedsRetry ?? false; }
   async setProvider(provider: RtcProvider) {
     if (provider === 'agora') this.adapter = await AgoraRtcAdapter.create(this.events);
     else if (provider === 'zego') this.adapter = new ZegoRtcAdapter(this.events);

@@ -95,6 +95,9 @@ export interface RtcEventSink {
 export interface RtcAdapter {
   readonly remoteUsers: RtcRemoteUser[];
   readonly zegoPulls?: ZegoPull[];
+  /** The provider's first screen publish after joining can initialize its
+   *  encoder on a low default profile; callers may verify and retry once. */
+  readonly firstShareNeedsRetry?: boolean;
   join(appId: string | number, room: string, token: string, uid: number): Promise<UID>;
   leave(): Promise<void>;
   prepareScreen?(preferences: Preferences): Promise<void>;

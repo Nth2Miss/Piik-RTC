@@ -16,6 +16,7 @@ export class VolcRtcAdapter implements RtcAdapter {
   private cache = new StatsCache();
   constructor(private events: RtcEventSink) {}
   get remoteUsers(): RtcRemoteUser[] { return [...this.remotes.values()]; }
+  readonly firstShareNeedsRetry = true;
   private context(): { engine:IRTCEngine; sdk:VolcModule } {
     if (!this.engine || !this.sdk) throw new Error('火山媒体组件尚未连接。');
     return { engine:this.engine, sdk:this.sdk };
