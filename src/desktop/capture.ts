@@ -307,6 +307,8 @@ export async function captureDesktopScreen(
       tracks,
       surface: selection.kind === 'screen' ? 'monitor' : 'window',
       hasAudio: tracks.length > 1,
+      width: video.width,
+      height: video.height,
       onEnded: handler => { endedCallback = handler; if (videoEnded) handler(); },
       close,
     };

@@ -37,7 +37,7 @@ export class RtcClient {
   }
   leave() { return this.adapter?.leave() ?? Promise.resolve(); }
   prepareScreen(preferences: Preferences) { return this.adapter?.prepareScreen?.(preferences) ?? Promise.resolve(); }
-  publish(tracks: LocalTrack[], preferences?: Preferences) { return this.current().publish(tracks, preferences); }
+  publish(tracks: LocalTrack[], preferences?: Preferences, size?: { width:number; height:number }) { return this.current().publish(tracks, preferences, size); }
   unpublish(tracks: LocalTrack[]) { return this.current().unpublish(tracks); }
   subscribe(user: RtcRemoteUser, kind: MediaKind) { return this.current().subscribe(user, kind); }
   unsubscribe(user: RtcRemoteUser) { return this.current().unsubscribe(user); }

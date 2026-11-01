@@ -98,7 +98,7 @@ export interface RtcAdapter {
   join(appId: string | number, room: string, token: string, uid: number): Promise<UID>;
   leave(): Promise<void>;
   prepareScreen?(preferences: Preferences): Promise<void>;
-  publish(tracks: LocalTrack[], preferences?: Preferences): Promise<void>;
+  publish(tracks: LocalTrack[], preferences?: Preferences, size?: { width:number; height:number }): Promise<void>;
   unpublish(tracks: LocalTrack[]): Promise<void>;
   subscribe(user: RtcRemoteUser, kind: MediaKind): Promise<void>;
   unsubscribe(user: RtcRemoteUser): Promise<void>;

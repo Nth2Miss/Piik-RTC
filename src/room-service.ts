@@ -75,7 +75,7 @@ export interface DiagnosticsReport {
   localVideoStats: unknown;
   remoteVideoStats: unknown;
   networkQuality: unknown;
-  capture: { surface: string; hasAudio: boolean; tracks: { kind: string; enabled: boolean }[] } | null;
+  capture: { surface: string; hasAudio: boolean; width?: number; height?: number; tracks: { kind: string; enabled: boolean }[] } | null;
   issues: { at: string; kind: string; message: string }[];
 }
 class ApiError extends Error {
@@ -247,7 +247,7 @@ export function createRoomService() {
       localVideoStats:tracks.length ? attempt(() => client.getLocalVideoStats()) : null,
       remoteVideoStats:state.connected ? attempt(() => client.getRemoteVideoStats()) : null,
       networkQuality:state.connected ? attempt(() => client.getNetworkQuality(typeof state.selected === 'number' ? state.selected : undefined)) : null,
-      capture:capture ? { surface:capture.surface, hasAudio:capture.hasAudio,
+      capture:capture ? { surface:capture.surface, hasAudio:capture.hasAudio, width:capture.width, height:capture.height,
         tracks:tracks.map(track => ({ kind:track.trackMediaType, enabled:track.enabled })) } : null,
       issues:[...issues],
     };
@@ -554,7 +554,7 @@ export function createRoomService() {
       if (!state.connected) await connectMedia();
       if (ended || !joined || !state.connected) throw new Error('共享已停止，请重新选择。');
       cancelIdleDisconnect();
-      await client.publish(next.tracks, sharePreferences);
+      await client.publish(next.tracks, sharePreferences, { width:next.width, height:next.height });
       if (ended || !joined) { await client.unpublish(next.tracks).catch(() => {}); throw new Error('共享已停止，请重新选择。'); }
       tracks = next.tracks; capture = next; source.setLocal(state.uid!, video);
       await source.select(state.uid);

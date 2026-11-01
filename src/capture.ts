@@ -41,6 +41,8 @@ export interface CapturedScreen {
   tracks: LocalTrack[];
   surface: string;
   hasAudio: boolean;
+  width: number;
+  height: number;
   onEnded: (callback: () => void) => void;
   close: () => void;
 }
@@ -97,6 +99,7 @@ export async function captureScreen(
     rawVideo.addEventListener('ended', ended);
     return {
       tracks, surface, hasAudio: tracks.length > 1,
+      width: settings.width || Number(target.width), height: settings.height || Number(target.height),
       onEnded: handler => { callback = handler; if (rawVideo.readyState === 'ended') handler(); },
       close: () => {
         rawVideo.removeEventListener('ended', ended);

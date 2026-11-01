@@ -88,23 +88,24 @@ export class VolcRtcAdapter implements RtcAdapter {
       ...(contentHint ? { contentHint } : {}),
     });
   }
-  async publish(tracks: LocalTrack[], preferences?: Preferences) {
+  async publish(tracks: LocalTrack[], preferences?: Preferences, size?: { width:number; height:number }) {
     const { engine, sdk } = this.context(), index = sdk.StreamIndex.STREAM_INDEX_SCREEN;
     const raw = tracks.map(track => track.getMediaStreamTrack());
     const video = raw.find(track => track.kind === 'video');
     if (!video) throw new Error('共享画面缺少视频轨，请重新选择。');
-    if (preferences) {
-      const config = encoderConfig(preferences, video.getSettings());
+    // Use the actual captured size so a transient low getSettings() value does
+    // not override the selected resolution on the first share.
+    const config = preferences ? encoderConfig(preferences, size ?? video.getSettings()) : undefined;
+    await engine.setVideoSourceType(index, sdk.VideoSourceType.VIDEO_SOURCE_TYPE_EXTERNAL);
+    await engine.setExternalVideoTrack(index, video);
+    if (preferences && config) {
       const contentHint = videoContentHint(preferences);
-      // Use the captured size so non-16:9 windows keep their aspect ratio.
       await engine.setScreenEncoderConfig({
         width:Number(config.width) || 1920, height:Number(config.height) || 1080, frameRate:Number(config.frameRate) || 30,
         maxKbps:effectiveBitrate(preferences), ...(contentHint ? { contentHint } : {}),
       });
+      video.contentHint = contentHint;
     }
-    await engine.setVideoSourceType(index, sdk.VideoSourceType.VIDEO_SOURCE_TYPE_EXTERNAL);
-    await engine.setExternalVideoTrack(index, video);
-    if (preferences) video.contentHint = videoContentHint(preferences);
     const audio = raw.find(track => track.kind === 'audio');
     if (audio) { await engine.setAudioSourceType(index, sdk.AudioSourceType.AUDIO_SOURCE_TYPE_EXTERNAL); await engine.setExternalAudioTrack(index, audio); }
     await engine.publishScreen(audio ? sdk.MediaType.AUDIO_AND_VIDEO : sdk.MediaType.VIDEO);

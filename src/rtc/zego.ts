@@ -74,11 +74,11 @@ export class ZegoRtcAdapter implements RtcAdapter {
     this.remotes.clear(); this.cache.clear(); this.local = undefined;
     this.events.emit('billing-change'); this.events.emit('connection-state-change', 'DISCONNECTED');
   }
-  async publish(tracks: LocalTrack[], preferences?: Preferences) {
+  async publish(tracks: LocalTrack[], preferences?: Preferences, size?: { width:number; height:number }) {
     const engine = this.requireEngine();
     const raw = tracks.map(track => track.getMediaStreamTrack());
     const video = raw.find(track => track.kind === 'video');
-    const config = preferences && video ? encoderConfig(preferences, video.getSettings()) : undefined;
+    const config = preferences && video ? encoderConfig(preferences, size ?? video.getSettings()) : undefined;
     const stream = await engine.createStream({ custom: {
       source:new MediaStream(raw),
       ...(preferences ? { bitrate:Math.min(effectiveBitrate(preferences), ZEGO_MAX_BITRATE), audioBitrate:128,
