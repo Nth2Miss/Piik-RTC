@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -31,6 +32,17 @@ namespace PiikDesktop
         private readonly bool _debug;
         private FormWindowState _stateBeforeFullscreen = FormWindowState.Normal;
         private FormBorderStyle _borderBeforeFullscreen = FormBorderStyle.Sizable;
+        private NotifyIcon _trayIcon;
+        private ContextMenuStrip _trayMenu;
+        private bool _hiddenToTray;
+        private bool _switchingWindowState;
+        private bool _closing;
+        private bool _trayHintShown;
+        private Rectangle _boundsBeforeHide;
+        private FormWindowState _stateBeforeHide = FormWindowState.Normal;
+        private FormBorderStyle _borderBeforeHide = FormBorderStyle.Sizable;
+        private const int WM_SYSCOMMAND = 0x0112;
+        private const int SC_MINIMIZE = 0xF020;
 
         public AppConfig Config { get { return _config; } }
         public string ServerUrl { get { return _config.ServerUrl; } }
@@ -74,6 +86,17 @@ namespace PiikDesktop
             catch { /* icon is optional */ }
 
             BuildContextMenu();
+            _trayMenu = new ContextMenuStrip();
+            _trayMenu.Items.Add(new ToolStripMenuItem("显示主窗口", null, (_, __) => RestoreFromTray()));
+            _trayMenu.Items.Add(new ToolStripSeparator());
+            _trayMenu.Items.Add(new ToolStripMenuItem("退出", null, (_, __) => Close()));
+            _trayIcon = new NotifyIcon
+            {
+                Text = "Piik-RTC",
+                Icon = Icon ?? SystemIcons.Application,
+                ContextMenuStrip = _trayMenu,
+            };
+            _trayIcon.DoubleClick += (_, __) => RestoreFromTray();
             _webView = new WebView2
             {
                 Dock = DockStyle.Fill,
@@ -83,16 +106,52 @@ namespace PiikDesktop
             Controls.SetChildIndex(_webView, 0);
 
             Load += async (_, __) => await InitializeAsync();
-            FormClosing += (_, __) =>
+            FormClosing += OnFormClosing;
+        }
+
+        private void OnFormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (_closing) return;
+            SaveWindowBounds();
+            if (e.CloseReason == CloseReason.WindowsShutDown || e.CloseReason == CloseReason.TaskManagerClosing)
             {
                 try { _bridge?.StopAll(); } catch { }
-                var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
-                _config.Width = bounds.Width;
-                _config.Height = bounds.Height;
-                _config.X = bounds.X;
-                _config.Y = bounds.Y;
-                _config.Save();
-            };
+                return;
+            }
+            _closing = true;
+            e.Cancel = true;
+            try { _bridge?.StopAll(); } catch { }
+            _ = CloseAfterLeaveAsync();
+        }
+
+        private async Task CloseAfterLeaveAsync()
+        {
+            try
+            {
+                var core = _webView?.CoreWebView2;
+                if (core != null)
+                {
+                    // The page leaves the room from its pagehide handler. Give
+                    // that handler a chance to run before WebView2 is destroyed,
+                    // otherwise the server keeps the member until its timeout.
+                    var script = core.ExecuteScriptAsync("window.dispatchEvent(new Event('pagehide'))");
+                    await Task.WhenAny(script, Task.Delay(500));
+                }
+            }
+            catch { /* closing anyway */ }
+            try { await Task.Delay(250); } catch { /* best effort */ }
+            try { _webView?.Dispose(); } catch { /* already disposed */ }
+            try { Close(); } catch { /* already closing */ }
+        }
+
+        private void SaveWindowBounds()
+        {
+            var bounds = _hiddenToTray ? _boundsBeforeHide : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds);
+            _config.Width = bounds.Width;
+            _config.Height = bounds.Height;
+            _config.X = bounds.X;
+            _config.Y = bounds.Y;
+            _config.Save();
         }
 
         private void RestoreOrCenter()
@@ -120,6 +179,88 @@ namespace PiikDesktop
                 if (bounds.Left < area.Right && bounds.Right > area.Left && bounds.Top < area.Bottom && bounds.Bottom > area.Top) return true;
             }
             return false;
+        }
+
+        private void HideToTray()
+        {
+            if (_hiddenToTray || _switchingWindowState || IsDisposed) return;
+            _switchingWindowState = true;
+            try
+            {
+                var minimized = WindowState == FormWindowState.Minimized;
+                _stateBeforeHide = minimized ? FormWindowState.Normal : WindowState;
+                _boundsBeforeHide = minimized || WindowState != FormWindowState.Normal ? RestoreBounds : Bounds;
+                _borderBeforeHide = FormBorderStyle;
+                WindowState = FormWindowState.Normal;
+                // A real minimize makes Chromium suspend the page, which stalls
+                // the shared video. Move the window off-screen instead so the
+                // WebView2 renderer and the capture pipeline keep running.
+                Location = new Point(-32000, -32000);
+                _hiddenToTray = true;
+                if (_trayIcon != null) _trayIcon.Visible = true;
+                if (!_trayHintShown && _trayIcon != null)
+                {
+                    _trayHintShown = true;
+                    _trayIcon.ShowBalloonTip(2500, "Piik-RTC", "已最小化到托盘，屏幕共享仍在继续。双击托盘图标恢复窗口。", ToolTipIcon.Info);
+                }
+            }
+            finally { _switchingWindowState = false; }
+        }
+
+        private void RestoreFromTray()
+        {
+            if (!_hiddenToTray || _switchingWindowState || IsDisposed) return;
+            _switchingWindowState = true;
+            try
+            {
+                _hiddenToTray = false;
+                if (_trayIcon != null) _trayIcon.Visible = false;
+                FormBorderStyle = _borderBeforeHide;
+                WindowState = FormWindowState.Normal;
+                Bounds = _boundsBeforeHide;
+                if (_stateBeforeHide == FormWindowState.Maximized) WindowState = FormWindowState.Maximized;
+                Show();
+                Activate();
+            }
+            finally { _switchingWindowState = false; }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_SYSCOMMAND && (m.WParam.ToInt32() & 0xFFF0) == SC_MINIMIZE)
+            {
+                HideToTray();
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (!_switchingWindowState && WindowState == FormWindowState.Minimized && IsHandleCreated && !IsDisposed)
+            {
+                try { BeginInvoke(new Action(HideToTray)); }
+                catch (InvalidOperationException) { /* handle is closing */ }
+            }
+        }
+
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            if (_hiddenToTray && !_switchingWindowState) RestoreFromTray();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (_trayIcon != null) { _trayIcon.Visible = false; _trayIcon.Dispose(); _trayIcon = null; }
+                if (_trayMenu != null) { _trayMenu.Dispose(); _trayMenu = null; }
+                _contextMenu?.Dispose();
+                _contextMenu = null;
+            }
+            base.Dispose(disposing);
         }
 
         private void BuildContextMenu()

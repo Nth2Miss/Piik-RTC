@@ -53,11 +53,13 @@ Piik-RTC-v<版本>.exe（C# / .NET Framework 4.8 / WinForms / WebView2）
         └─ PCM → 主程序 → WebView2 消息
 ```
 
-渲染端优先使用 Windows Graphics Capture 采集 GPU 画面：BGRA 帧通过 WebView2 共享内存传给前端，优先写入 `MediaStreamTrackGenerator`（Insertable Streams）直接交给 RTC SDK；不支持时退回隐藏 canvas + `canvas.captureStream()`。两条路径都只编码一次，不再经过 JPEG。选择 1440P/原画或 WGC 不可用时，回退到 GDI+ + JPEG 桥接。音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给 RTC SDK。即构房间的共享画面最高为 1080P、码率最高为 10 Mbps，选择 1440P/原画或 12/16 Mbps 时会自动按 1080P / 10 Mbps 采集。
+渲染端优先使用 Windows Graphics Capture 采集 GPU 画面：源帧与目标分辨率不同时，先用 D3D11 VideoProcessor 在 GPU 上等比缩放到目标尺寸，再通过 staging 纹理回读，BGRA 帧经 WebView2 共享内存传给前端，优先写入 `MediaStreamTrackGenerator`（Insertable Streams）直接交给 RTC SDK；不支持时退回隐藏 canvas + `canvas.captureStream()`。两条路径都只编码一次，不再经过 JPEG。GPU 缩放不可用时回退 SoftwareBitmap + GDI+ 缩放；选择 1440P/原画或 WGC 不可用时，回退到 GDI+ + JPEG 桥接。音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给 RTC SDK。即构房间的共享画面最高为 1080P、码率最高为 10 Mbps，选择 1440P/原画或 12/16 Mbps 时会自动按 1080P / 10 Mbps 采集。
 
 ## 原生采集
 
-- **画面**：优先使用 Windows Graphics Capture 捕获窗口或显示器，GPU 帧按目标分辨率等比缩放（不放大）后以 BGRA 通过共享内存交给前端；支持 Insertable Streams 时直接写入 `MediaStreamTrackGenerator`，不支持时画到隐藏 canvas 再 `captureStream()`。主窗口被最小化或遮挡时 WebView2 的后台/遮挡节流已关闭，避免采集帧率跟着页面渲染一起下降。WGC 不可用或选择 1440P/原画时回退到 `PrintWindow(PW_RENDERFULLCONTENT)` / `CopyFromScreen` + JPEG（质量约 72）。最小化的窗口不会出现在列表里；个别受保护或特殊渲染的窗口可能返回黑帧。
+- **画面**：优先使用 Windows Graphics Capture 捕获窗口或显示器，GPU 帧按目标分辨率等比缩放（不放大）。缩放优先使用 D3D11 VideoProcessor 在 GPU 上完成并 staging 回读，避免每帧 GDI+ 缩放；后端再以 BGRA 通过共享内存交给前端。支持 Insertable Streams 时直接写入 `MediaStreamTrackGenerator`，不支持时画到隐藏 canvas 再 `captureStream()`。主窗口最小化时不会真正进入 Windows 最小化状态，而是移到屏幕外并保留托盘图标，避免 WebView2 暂停页面渲染；后台/遮挡节流也已关闭。WGC 不可用或选择 1440P/原画时回退到 `PrintWindow(PW_RENDERFULLCONTENT)` / `CopyFromScreen` + JPEG（质量约 72）。最小化的窗口不会出现在列表里；个别受保护或特殊渲染的窗口可能返回黑帧。
+- **最小化**：点击最小化会把窗口移到屏幕外，托盘图标保留，屏幕共享继续；双击托盘图标或点击任务栏恢复窗口。这样 WebView2 页面不会因为真实最小化被 Chromium 节流。
+- **退出**：关闭窗口会先触发页面的 `pagehide`，发送离房请求并让 RTC 离开，成员通常会在 1 秒内从房间消失；Windows 关机或任务管理器强杀时无法保证即时离房。
 - **音频**：与网页版相同的 WASAPI shared-mode 回环。系统模式请求 48 kHz / 16-bit / stereo，失败时回退 44.1 kHz；程序模式使用 Windows 进程回环的 include/exclude 进程树。
 - **语音过滤**：一次排除一个进程树，默认选择检测到的 Oopz / KOOK 等语音软件。语音软件重启后，请停止并重新开始共享。
 - **声音来源**：选择窗口时可以只共享该程序的声音；选择屏幕时可以共享整个系统声音并选择要过滤的语音软件。
@@ -118,6 +120,7 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 | 程序声音没有声音 | 确认 Windows 版本 ≥ 19041；该程序的声音可能不在窗口进程树内，改用共享屏幕 |
 | 过滤后仍有回声 | 语音软件可能已重启；重新开始共享，并在选择器中确认选中的是当前语音软件 |
 | 画面卡顿 | 1080P/60fps 及以下使用 WGC 路径；1440P/原画会回退 JPEG。若 60fps 仍卡，降到 30fps 或 720P |
+| 关闭客户端后仍显示在房间 | 正常关闭会先发送离房请求；强制结束进程或系统关机时会等到服务端心跳超时 |
 | 某窗口画面全黑 | 该窗口可能禁止 WGC/PrintWindow 捕获；改为共享整个屏幕或使用浏览器 |
 | 连接时显示登录页或提示 401 | 反向代理启用了 HTTP 认证，在登录页输入代理配置的用户名和密码；保存的密码失效时会重新显示登录页并删除旧凭据，取消后回到设置页重新连接即可 |
 | 想清除保存的登录密码 | 在窗口内右键选择“清除保存的登录信息…”，重启程序后生效；也可以在登录页取消勾选“记住密码”后重新登录 |

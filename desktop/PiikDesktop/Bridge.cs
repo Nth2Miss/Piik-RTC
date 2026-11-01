@@ -33,12 +33,17 @@ namespace PiikDesktop
         private readonly Dictionary<int, CoreWebView2SharedBuffer> _inFlightBuffers = new Dictionary<int, CoreWebView2SharedBuffer>();
         private int _nextBufferId;
         private int _pendingRawFrames;
+        private long _rawPosted;
+        private long _rawDroppedPending;
+        private long _rawDroppedBuffer;
+        private System.Threading.Timer _rawStats;
 
         public Bridge(IBridgeHost host, CoreWebView2 core)
         {
             _host = host;
             _core = core;
             _uiContext = SynchronizationContext.Current;
+            _rawStats = new System.Threading.Timer(LogRawStats, null, 2000, 2000);
         }
 
         public bool SetupMode
@@ -293,6 +298,7 @@ namespace PiikDesktop
             if (frame == null || frame.Data == null) return;
             if (Interlocked.Increment(ref _pendingRawFrames) > 2)
             {
+                Interlocked.Increment(ref _rawDroppedPending);
                 Interlocked.Decrement(ref _pendingRawFrames);
                 frame.Release?.Invoke();
                 return;
@@ -339,7 +345,7 @@ namespace PiikDesktop
                     catch (Exception exception) { Log.Write("shared buffer create failed: " + exception.Message); return; }
                 }
                 // Backpressure: the renderer keeps at most a few buffers in flight.
-                if (buffer == null) return;
+                if (buffer == null) { Interlocked.Increment(ref _rawDroppedBuffer); return; }
                 bufferId = ++_nextBufferId;
                 _inFlightBuffers[bufferId] = buffer;
             }
@@ -357,6 +363,7 @@ namespace PiikDesktop
                     ["timestamp"] = frame.TimestampUs,
                 };
                 _core.PostSharedBufferToScript(buffer, CoreWebView2SharedBufferAccess.ReadOnly, SimpleJson.Stringify(payload));
+                Interlocked.Increment(ref _rawPosted);
             }
             catch (Exception exception)
             {
@@ -367,6 +374,15 @@ namespace PiikDesktop
                     _freeBuffers.Add(buffer);
                 }
             }
+        }
+
+        private void LogRawStats(object state)
+        {
+            var posted = Interlocked.Exchange(ref _rawPosted, 0);
+            var pending = Interlocked.Exchange(ref _rawDroppedPending, 0);
+            var buffer = Interlocked.Exchange(ref _rawDroppedBuffer, 0);
+            if (posted + pending + buffer == 0) return;
+            Log.Write($"WEBVIEW raw fps posted={posted / 2.0:F1} dropPending={pending / 2.0:F1} dropBuffer={buffer / 2.0:F1}");
         }
 
         private void ReleaseSharedBuffer(int bufferId)
