@@ -5,15 +5,6 @@ import type { BrowserAudioTrack, LocalTrack, MediaKind, RemoteVideoStats, RtcAda
 
 type VolcModule = typeof import('@volcengine/rtc');
 
-interface ScreenPublishSession {
-  tracks: LocalTrack[];
-  preferences: Preferences;
-  size?: { width:number; height:number };
-  targetWidth: number;
-  retried: boolean;
-  timer?: ReturnType<typeof setTimeout>;
-}
-
 export class VolcRtcAdapter implements RtcAdapter {
   private engine?: IRTCEngine;
   private sdk?: VolcModule;
@@ -23,7 +14,6 @@ export class VolcRtcAdapter implements RtcAdapter {
   private remoteQuality = new Map<number, number>();
   private remoteScreen = new Map<number, { at:number; stats:VolcRemoteVideoStats }>();
   private cache = new StatsCache();
-  private screenSession?: ScreenPublishSession;
   constructor(private events: RtcEventSink) {}
   get remoteUsers(): RtcRemoteUser[] { return [...this.remotes.values()]; }
   private context(): { engine:IRTCEngine; sdk:VolcModule } {
@@ -83,7 +73,6 @@ export class VolcRtcAdapter implements RtcAdapter {
     return uid;
   }
   async leave() {
-    this.clearScreenSession();
     const engine = this.engine, sdk = this.sdk; this.engine = undefined; this.sdk = undefined;
     if (engine && sdk) { await engine.leaveRoom(); sdk.default.destroyEngine(engine); }
     this.remotes.clear(); this.localQuality = 0; this.remoteQuality.clear(); this.remoteScreen.clear(); this.cache.clear();
@@ -100,44 +89,6 @@ export class VolcRtcAdapter implements RtcAdapter {
     });
   }
   async publish(tracks: LocalTrack[], preferences?: Preferences, size?: { width:number; height:number }) {
-    this.clearScreenSession();
-    const config = await this.startScreen(tracks, preferences, size);
-    if (!preferences || !config) return;
-    // The first publish after joining can leave Volc's screen encoder on its
-    // low default profile even after setScreenEncoderConfig. Retry once if the
-    // encoder is still sending a reduced resolution at a very low frame rate.
-    const session: ScreenPublishSession = {
-      tracks, preferences, size, targetWidth:Number(config.width) || 1920, retried:false,
-    };
-    this.screenSession = session;
-    session.timer = setTimeout(() => { void this.retryLowFirstScreen(session); }, 4000);
-  }
-  private clearScreenSession() {
-    if (this.screenSession?.timer) clearTimeout(this.screenSession.timer);
-    this.screenSession = undefined;
-  }
-  private async retryLowFirstScreen(session: ScreenPublishSession) {
-    if (this.screenSession !== session || session.retried || !this.engine || !this.sdk) return;
-    let stats: VolcLocalVideoStats | undefined;
-    try { stats = this.localStats(); } catch { return; }
-    const width = Number(stats?.encodedFrameWidth) || 0;
-    const fps = Number(stats?.sentFrameRate) || 0;
-    if (!width || width >= session.targetWidth * 0.9 || fps >= 10) return;
-    session.retried = true;
-    try {
-      const { engine, sdk } = this.context(), index = sdk.StreamIndex.STREAM_INDEX_SCREEN;
-      await engine.unpublishScreen(sdk.MediaType.AUDIO_AND_VIDEO);
-      await engine.setVideoSourceType(index, sdk.VideoSourceType.VIDEO_SOURCE_TYPE_INTERNAL);
-      await engine.setAudioSourceType(index, sdk.AudioSourceType.AUDIO_SOURCE_TYPE_INTERNAL);
-      if (this.screenSession !== session) return;
-      await this.startScreen(session.tracks, session.preferences, session.size);
-    } catch {
-      if (this.screenSession === session) {
-        try { await this.startScreen(session.tracks, session.preferences, session.size); } catch { /* the user can share again */ }
-      }
-    }
-  }
-  private async startScreen(tracks: LocalTrack[], preferences?: Preferences, size?: { width:number; height:number }) {
     const { engine, sdk } = this.context(), index = sdk.StreamIndex.STREAM_INDEX_SCREEN;
     const raw = tracks.map(track => track.getMediaStreamTrack());
     const video = raw.find(track => track.kind === 'video');
@@ -169,10 +120,8 @@ export class VolcRtcAdapter implements RtcAdapter {
         await engine.setScreenEncoderConfig(screenConfig);
       } catch { /* the profile set before publishing is still in effect */ }
     }
-    return config;
   }
   async unpublish(_tracks: LocalTrack[]) {
-    this.clearScreenSession();
     if (!this.engine || !this.sdk) return;
     const { engine, sdk } = this.context();
     await engine.unpublishScreen(sdk.MediaType.AUDIO_AND_VIDEO);

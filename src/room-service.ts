@@ -3,7 +3,7 @@ import { getAgoraSdk } from './agora-sdk';
 import { browserCaptureTracks, captureScreen, type CapturedScreen } from './capture';
 import { captureDesktopScreen } from './desktop/capture.ts';
 import { desktopAudioLabel, type CaptureSelection } from './desktop/bridge.ts';
-import { defaults, effectiveBitrate, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
+import { defaults, effectiveBitrate, encoderConfig, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
 import { usernameError } from './username';
 import type { Participant, Room, RtcProvider } from './types';
@@ -106,6 +106,7 @@ export function createRoomService() {
   const issues: { at:string; kind:string; message:string }[] = [];
   const mediaHistory: ConnectionSnapshot[] = [];
   let playback: PlaybackSnapshot | undefined, playbackAt = 0;
+  let shareRetryTimer: ReturnType<typeof setTimeout> | undefined;
   const redact = (value: string) => value
     .replace(/((?:token|sessionKey|inviteKey|appId|password|secret)\s*[=:]\s*)[^\s,;&"']+/gi, '$1[redacted]')
     .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[token]');
@@ -447,6 +448,8 @@ export function createRoomService() {
     try { await mediaConnecting; } finally { mediaConnecting = undefined; }
   }
   async function stop(switchSource = true) {
+    clearTimeout(shareRetryTimer);
+    shareRetryTimer = undefined;
     const old = tracks; tracks = [];
     if (state.uid !== undefined) source.setLocal(state.uid);
     if (source.selected === state.uid) await source.select(switchSource ? members().find(person => person.uid !== state.uid && person.sharing)?.uid : undefined);
@@ -515,7 +518,9 @@ export function createRoomService() {
     const id = new URLSearchParams(location.hash.slice(1)).get('room');
     if (id && /^[a-f0-9]{12}$/.test(id)) await enter(await api<Room>(`/api/rooms/${id}`));
   }
-  async function share(selection?: CaptureSelection) {
+  async function share(selection?: CaptureSelection, retry = false) {
+    clearTimeout(shareRetryTimer);
+    shareRetryTimer = undefined;
     if (!selection && (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia)) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
     const isZego = state.room?.provider === 'zego';
     // Zego caps screen sharing at 1080P and 10 Mbps. The desktop picker can
@@ -563,6 +568,29 @@ export function createRoomService() {
       const resolution = sharePreferences.resolution === 'native' ? '原画' : `${sharePreferences.resolution}p`;
       emit({ caption:`${resolution} · ${sharePreferences.fps} fps · ${audioLabel}，切换观看会保留你的共享。` });
       if (!selection && state.preferences.audio && !next.hasAudio) notify(`未获得${sourceAudio}音轨，本次仅共享画面。请在浏览器选择器中勾选共享音频。`);
+      if (!retry && selection && state.room?.provider === 'volc') {
+        // Volc's first screen publish after joining can stay on its low
+        // resolution ladder. Re-running stop/share recreates the capture and
+        // MediaStreamTrackGenerator, which is the same path as the user's
+        // manual second share. Retry once, and only while both resolution and
+        // frame rate are clearly below the selected profile.
+        const targetWidth = Number(encoderConfig(sharePreferences, { width:next.width, height:next.height }).width) || 1920;
+        shareRetryTimer = setTimeout(() => {
+          shareRetryTimer = undefined;
+          void (async () => {
+            if (!tracks.includes(video) || !state.connected || !joined) return;
+            let stats: ReturnType<typeof client.getLocalVideoStats> | undefined;
+            try { stats = client.getLocalVideoStats(); } catch { return; }
+            const width = Number(stats?.sendResolutionWidth) || 0;
+            const fps = Number(stats?.sendFrameRate) || 0;
+            // Retry when no frames are being sent at all, or when Volc has
+            // already stepped the resolution down at a very low frame rate.
+            if (!width || (fps >= 2 && (width >= targetWidth * 0.9 || fps >= 10))) return;
+            await stop();
+            await share(selection, true);
+          })().catch(() => { /* keep the manual share button available */ });
+        }, 2500);
+      }
       void heartbeat();
     } catch (error) { next.close(); throw error; }
   }
