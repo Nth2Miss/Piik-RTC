@@ -96,19 +96,30 @@ export class VolcRtcAdapter implements RtcAdapter {
     // Use the actual captured size so a transient low getSettings() value does
     // not override the selected resolution on the first share.
     const config = preferences ? encoderConfig(preferences, size ?? video.getSettings()) : undefined;
+    const contentHint = preferences ? videoContentHint(preferences) : undefined;
+    const screenConfig = preferences && config ? {
+      width:Number(config.width) || 1920, height:Number(config.height) || 1080, frameRate:Number(config.frameRate) || 30,
+      maxKbps:effectiveBitrate(preferences), ...(contentHint ? { contentHint } : {}),
+    } : undefined;
     await engine.setVideoSourceType(index, sdk.VideoSourceType.VIDEO_SOURCE_TYPE_EXTERNAL);
     await engine.setExternalVideoTrack(index, video);
-    if (preferences && config) {
-      const contentHint = videoContentHint(preferences);
-      await engine.setScreenEncoderConfig({
-        width:Number(config.width) || 1920, height:Number(config.height) || 1080, frameRate:Number(config.frameRate) || 30,
-        maxKbps:effectiveBitrate(preferences), ...(contentHint ? { contentHint } : {}),
-      });
-      video.contentHint = contentHint;
+    if (screenConfig) {
+      await engine.setScreenEncoderConfig(screenConfig);
+      if (contentHint) video.contentHint = contentHint;
     }
     const audio = raw.find(track => track.kind === 'audio');
     if (audio) { await engine.setAudioSourceType(index, sdk.AudioSourceType.AUDIO_SOURCE_TYPE_EXTERNAL); await engine.setExternalAudioTrack(index, audio); }
     await engine.publishScreen(audio ? sdk.MediaType.AUDIO_AND_VIDEO : sdk.MediaType.VIDEO);
+    if (screenConfig) {
+      try {
+        // The first publish can initialize the screen publisher with its
+        // default 15fps profile. Re-apply the selected profile once the stream
+        // exists; without this the first share after joining sends ~1fps and
+        // Volc adapts the resolution down until the user shares again.
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await engine.setScreenEncoderConfig(screenConfig);
+      } catch { /* the profile set before publishing is still in effect */ }
+    }
   }
   async unpublish(_tracks: LocalTrack[]) {
     if (!this.engine || !this.sdk) return;
