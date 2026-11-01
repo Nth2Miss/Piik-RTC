@@ -23,7 +23,31 @@ function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-/** The native host sends JPEG frames; a canvas turns them into a MediaStreamTrack. */
+function createCanvasVideoTrack(preferences: Preferences, width: number, height: number) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;opacity:0;pointer-events:none';
+  document.body.appendChild(canvas);
+  const context = canvas.getContext('2d', { alpha: false, desynchronized: true });
+  if (!context) {
+    canvas.remove();
+    throw new Error('无法创建视频画布。');
+  }
+  context.fillStyle = '#000';
+  context.fillRect(0, 0, width, height);
+  let stream = canvas.captureStream(0);
+  let track = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
+  if (typeof track.requestFrame !== 'function') {
+    track.stop();
+    stream = canvas.captureStream(preferences.fps);
+    track = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
+  }
+  const requestFrame = typeof track.requestFrame === 'function' ? () => track.requestFrame() : () => {};
+  return { canvas, context, track, requestFrame };
+}
+
+/** The native host sends raw BGRA frames, with JPEG as the fallback. */
 async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelection, preferences: Preferences): Promise<NativeVideo> {
   const native = preferences.resolution === 'native';
   const target = encoderConfig(preferences);
@@ -58,29 +82,33 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
   const height = Number(started.height);
   const raw = started.mode === 'raw' && typeof VideoFrame === 'function';
 
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  canvas.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;opacity:0;pointer-events:none';
-  document.body.appendChild(canvas);
-  const context = canvas.getContext('2d', { alpha: false, desynchronized: true });
-  if (!context) {
-    offEnded();
-    canvas.remove();
-    void bridge.stopVideo().catch(() => {});
-    throw new Error('无法创建视频画布。');
+  let generator: MediaStreamTrackGenerator | undefined;
+  let writer: WritableStreamDefaultWriter<VideoFrame> | undefined;
+  if (raw && typeof MediaStreamTrackGenerator === 'function') {
+    try {
+      generator = new MediaStreamTrackGenerator({ kind:'video' });
+      writer = generator.writable.getWriter();
+    } catch {
+      generator = undefined; writer = undefined;
+    }
   }
-  context.fillStyle = '#000';
-  context.fillRect(0, 0, width, height);
 
-  let stream = canvas.captureStream(0);
-  let track = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
-  if (typeof track.requestFrame !== 'function') {
-    track.stop();
-    stream = canvas.captureStream(preferences.fps);
-    track = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
+  let canvas: HTMLCanvasElement | undefined;
+  let context: CanvasRenderingContext2D | undefined;
+  let requestFrame = () => {};
+  let track: MediaStreamTrack;
+  if (generator) {
+    track = generator;
+  } else {
+    try {
+      const created = createCanvasVideoTrack(preferences, width, height);
+      canvas = created.canvas; context = created.context; track = created.track; requestFrame = created.requestFrame;
+    } catch (error) {
+      offEnded();
+      void bridge.stopVideo().catch(() => {});
+      throw error;
+    }
   }
-  const requestFrame = typeof track.requestFrame === 'function' ? () => track.requestFrame() : () => {};
 
   let stopped = false;
   let frameSink: ((frame: DesktopVideoFrame) => void) | null = null;
@@ -88,34 +116,45 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
   let writingRaw = false;
   let latestRaw: VideoFrame | null = null;
 
-  // WGC frames arrive as BGRA VideoFrames. Drawing them straight onto the
-  // canvas avoids the JPEG encode/decode round trip while keeping a canvas
-  // track, which is supported by every RTC SDK.
-  const drawRaw = (frame: VideoFrame) => {
+  // Keep only the newest frame while the previous one is being consumed.
+  const queueRaw = (frame: VideoFrame, consume: (frame: VideoFrame) => void | Promise<void>) => {
     if (stopped) { frame.close(); return; }
-    if (writingRaw) {
-      latestRaw?.close();
-      latestRaw = frame;
-      return;
-    }
+    latestRaw?.close();
+    latestRaw = frame;
+    if (writingRaw) return;
     writingRaw = true;
-    try {
-      context.drawImage(frame, 0, 0, width, height);
-      requestFrame();
-    } catch {
-      /* a bad frame must not stop the share */
-    } finally {
-      frame.close();
+    void (async () => {
+      while (latestRaw && !stopped) {
+        const next = latestRaw;
+        latestRaw = null;
+        try { await consume(next); } catch { /* a bad frame must not stop the share */ }
+        finally { next.close(); }
+      }
       writingRaw = false;
-    }
-    if (latestRaw) {
-      const next = latestRaw;
-      latestRaw = null;
-      drawRaw(next);
-    }
+    })();
   };
 
-  const offRaw = raw ? bridge.onVideoFrameRaw(({ frame }) => drawRaw(frame)) : undefined;
+  let pushRaw: (frame: VideoFrame) => void;
+  if (generator) {
+    // A generator track keeps publishing independent of page rendering, which
+    // Chromium throttles while the host window is hidden or occluded.
+    pushRaw = frame => {
+      const target = writer;
+      if (!target) { frame.close(); return; }
+      queueRaw(frame, next => target.write(next));
+    };
+  } else {
+    // WGC frames arrive as BGRA VideoFrames. Drawing them straight onto the
+    // canvas avoids the JPEG encode/decode round trip while keeping a canvas
+    // track, which is supported by every RTC SDK.
+    pushRaw = frame => {
+      const ctx = context;
+      if (!ctx) { frame.close(); return; }
+      queueRaw(frame, next => { ctx.drawImage(next, 0, 0, width, height); requestFrame(); });
+    };
+  }
+
+  const offRaw = raw ? bridge.onVideoFrameRaw(({ frame }) => pushRaw(frame)) : undefined;
   const offFrame = raw ? undefined : bridge.onVideoFrame(frame => {
     if (frameSink) frameSink(frame);
     else if (!pendingFrame) pendingFrame = frame;
@@ -129,7 +168,7 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
     decoding = true;
     try {
       const bitmap = await createImageBitmap(new Blob([base64ToBytes(frame.data)], { type: 'image/jpeg' }));
-      if (!stopped) {
+      if (!stopped && context) {
         context.drawImage(bitmap, 0, 0, width, height);
         requestFrame();
       }
@@ -158,7 +197,8 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
     pendingFrame = null;
     try { await bridge.stopVideo(); } catch { /* host may already be stopped */ }
     try { track.stop(); } catch { /* already stopped */ }
-    canvas.remove();
+    void writer?.close().catch(() => { /* already closed */ });
+    canvas?.remove();
   };
 
   if (!raw) {

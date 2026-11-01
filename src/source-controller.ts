@@ -54,6 +54,7 @@ export class SourceController {
       await this.subscribe(user, 'audio');
       if (revision !== this.revision) return;
       this.audioPlaying = user.audioTrack;
+      if (this.paused) this.audioPlaying?.stop();
       this.applyAudio(); if (!this.paused) this.audioPlaying?.play();
     } catch (error) { if (revision === this.revision) this.options.error(error); }
   }
@@ -95,5 +96,5 @@ export class SourceController {
     }).catch(error => { if (revision === this.revision) this.options.error(error); });
     return this.chain;
   }
-  resumeAudio() { this.subscribed?.audioTrack?.play(); }
+  resumeAudio() { if (!this.paused) this.subscribed?.audioTrack?.play(); }
 }

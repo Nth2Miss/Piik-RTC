@@ -49,7 +49,14 @@ namespace PiikDesktop
         {
             _config = config;
             _debug = Array.Exists(args, argument => string.Equals(argument, "--debug", StringComparison.OrdinalIgnoreCase));
-            _browserArguments = "--autoplay-policy=no-user-gesture-required";
+            // Screen sharing runs through the WebView2 page; Chromium otherwise
+            // throttles the canvas/capture pipeline when the window is hidden or
+            // occluded, dropping the published frame rate.
+            _browserArguments = "--autoplay-policy=no-user-gesture-required"
+                + " --disable-background-timer-throttling"
+                + " --disable-backgrounding-occluded-windows"
+                + " --disable-renderer-backgrounding"
+                + " --disable-features=CalculateNativeWinOcclusion";
             if (_debug) _browserArguments += " --remote-debugging-port=9222 --remote-allow-origins=*";
 
             Text = "Piik-RTC";

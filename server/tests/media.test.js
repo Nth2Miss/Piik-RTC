@@ -99,6 +99,15 @@ test('暂停和恢复不修改 SDK 视频轨，暂停期间调整音量后仍能
   assert.equal(log.at(-1), 'play:a1');
   assert.equal(log.filter(item => item === 'stop:v1' || item === 'play:v1').length, 1);
 });
+test('暂停状态下订阅新音轨立即静音，恢复后才播放', async () => {
+  const { log, controller } = setup();
+  controller.setPaused(true);
+  await controller.select(1);
+  assert.ok(log.includes('stop:a1'));
+  assert.equal(log.includes('play:a1'), false);
+  controller.setPaused(false);
+  assert.equal(log.at(-1), 'play:a1');
+});
 test('accepts the 12 and 16 Mbps bitrate tiers', () => {
   assert.equal(normalizePreferences({ ...defaults, bitrate: 12000 }).bitrate, 12000);
   assert.equal(normalizePreferences({ ...defaults, bitrate: 16000 }).bitrate, 16000);

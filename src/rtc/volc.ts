@@ -12,6 +12,7 @@ export class VolcRtcAdapter implements RtcAdapter {
   private remotes = new Map<number, RtcRemoteUser>();
   private localQuality = 0;
   private remoteQuality = new Map<number, number>();
+  private remoteScreen = new Map<number, { at:number; stats:VolcRemoteVideoStats }>();
   private cache = new StatsCache();
   constructor(private events: RtcEventSink) {}
   get remoteUsers(): RtcRemoteUser[] { return [...this.remotes.values()]; }
@@ -29,6 +30,9 @@ export class VolcRtcAdapter implements RtcAdapter {
     this.events.emit('connection-state-change', 'CONNECTING');
     const mod = await import('@volcengine/rtc'), rtc = mod.default;
     this.sdk = mod;
+    // The Web SDK gates remote stats callbacks behind this global switch; enable
+    // it so onRemoteStreamStats carries screen video and audio statistics.
+    try { rtc.setParameter('UPLOAD_REMOTE_STATS', 'video,audio'); } catch { /* older SDK builds */ }
     const engine = this.engine = rtc.createEngine(String(appId));
     engine.on(rtc.events.onConnectionStateChanged, ({ state }) => {
       if (this.engine !== engine) return;
@@ -45,12 +49,12 @@ export class VolcRtcAdapter implements RtcAdapter {
       if (this.engine !== engine) return;
       const user = this.remote(Number(userId));
       if (mediaType & 1) { user.hasAudio = false; this.events.emit('user-unpublished', user, 'audio'); }
-      if (mediaType & 2) { user.hasVideo = false; this.events.emit('user-unpublished', user, 'video'); }
+      if (mediaType & 2) { user.hasVideo = false; this.remoteScreen.delete(Number(userId)); this.events.emit('user-unpublished', user, 'video'); }
     });
     engine.on(rtc.events.onUserLeave, ({ userInfo }) => {
       if (this.engine !== engine) return;
       const id = Number(userInfo?.userId), user = this.remotes.get(id);
-      if (user) { this.remotes.delete(id); this.events.emit('user-left', user); }
+      if (user) { this.remotes.delete(id); this.remoteScreen.delete(id); this.events.emit('user-left', user); }
     });
     engine.on(rtc.events.onTokenWillExpire, () => { if (this.engine === engine) this.events.emit('token-privilege-will-expire'); });
     // Screen audio is played by the RTC engine itself.
@@ -60,7 +64,9 @@ export class VolcRtcAdapter implements RtcAdapter {
     engine.on(rtc.events.onRemoteStreamStats, stats => {
       if (this.engine !== engine) return;
       const id = Number(stats?.userId);
-      if (Number.isSafeInteger(id) && id > 0) this.remoteQuality.set(id, Number(stats?.rxQuality) || 0);
+      if (!Number.isSafeInteger(id) || id <= 0) return;
+      this.remoteQuality.set(id, Number(stats?.rxQuality) || 0);
+      if (stats?.isScreen && stats.videoStats) this.remoteScreen.set(id, { at:Date.now(), stats:stats.videoStats });
     });
     await engine.joinRoom(token, room, { userId:String(uid) }, { isAutoPublish:false, isAutoSubscribeAudio:false, isAutoSubscribeVideo:false });
     this.events.emit('connection-state-change', 'CONNECTED');
@@ -69,7 +75,7 @@ export class VolcRtcAdapter implements RtcAdapter {
   async leave() {
     const engine = this.engine, sdk = this.sdk; this.engine = undefined; this.sdk = undefined;
     if (engine && sdk) { await engine.leaveRoom(); sdk.default.destroyEngine(engine); }
-    this.remotes.clear(); this.localQuality = 0; this.remoteQuality.clear(); this.cache.clear();
+    this.remotes.clear(); this.localQuality = 0; this.remoteQuality.clear(); this.remoteScreen.clear(); this.cache.clear();
     this.events.emit('billing-change'); this.events.emit('connection-state-change', 'DISCONNECTED');
   }
   async publish(tracks: LocalTrack[], preferences?: Preferences) {
@@ -104,13 +110,17 @@ export class VolcRtcAdapter implements RtcAdapter {
   }
   private playbackTrack(uid: number): BrowserAudioTrack {
     const id = String(uid);
+    let volume = 80, paused = false;
+    const apply = () => {
+      if (!this.engine || !this.sdk) return;
+      this.engine.setPlaybackVolume(id, this.sdk.StreamIndex.STREAM_INDEX_SCREEN, paused ? 0 : Math.max(0, Math.min(400, volume)));
+    };
+    // The RTC engine owns screen audio playback, so pause/resume has to mute
+    // the screen stream instead of stopping a separate audio element.
     return {
-      setVolume:value => {
-        if (!this.engine || !this.sdk) return;
-        this.engine.setPlaybackVolume(id, this.sdk.StreamIndex.STREAM_INDEX_SCREEN, Math.max(0, Math.min(400, value)));
-      },
-      play() { /* Playback is owned by the RTC engine. */ },
-      stop() { /* unsubscribeScreen stops playback. */ },
+      setVolume:value => { volume = value; apply(); },
+      play() { paused = false; apply(); },
+      stop() { paused = true; apply(); },
     };
   }
   async subscribe(user: RtcRemoteUser, kind: MediaKind) {
@@ -122,6 +132,7 @@ export class VolcRtcAdapter implements RtcAdapter {
   }
   async unsubscribe(user: RtcRemoteUser) {
     if (this.engine && this.sdk) await this.engine.unsubscribeScreen(String(user.uid), this.sdk.MediaType.AUDIO_AND_VIDEO);
+    this.remoteScreen.delete(Number(user.uid));
     user.videoTrack = undefined; user.audioTrack = undefined;
   }
   async renewToken(token: string) { await this.context().engine.updateToken(token); }
@@ -131,6 +142,11 @@ export class VolcRtcAdapter implements RtcAdapter {
   }
   private remoteStats(uid: number): VolcRemoteVideoStats | undefined {
     if (!this.engine) return undefined;
+    // The SDK's public getRemoteVideoStats() reads an async stats object
+    // synchronously and can return an empty record, so prefer the stream stats
+    // already pushed by onRemoteStreamStats.
+    const pushed = this.remoteScreen.get(uid);
+    if (pushed && Date.now() - pushed.at < 6000) return pushed.stats;
     return this.cache.read(`volc:remote:${uid}`, 1000, () => {
       const items = this.context().engine.getRemoteVideoStats()[String(uid)] || [];
       return items.find(item => item?.screenVideoStats?.width)?.screenVideoStats

@@ -1,6 +1,6 @@
 import type { IAgoraRTCClient, IAgoraRTCRemoteUser, ILocalAudioTrack, ILocalVideoTrack, UID } from 'agora-rtc-sdk-ng';
 import { loadAgoraSdk } from '../agora-sdk';
-import type { LocalTrack, MediaKind, RtcAdapter, RtcEventSink, RtcRemoteUser } from './types';
+import type { LocalTrack, MediaKind, RemoteVideoStats, RtcAdapter, RtcEventSink, RtcRemoteUser } from './types';
 
 export class AgoraRtcAdapter implements RtcAdapter {
   private constructor(private client: IAgoraRTCClient, private events: RtcEventSink) {}
@@ -33,5 +33,20 @@ export class AgoraRtcAdapter implements RtcAdapter {
   getRTCStats() { return this.client.getRTCStats(); }
   getNetworkQuality() { return this.client.getNetworkQuality(); }
   getLocalVideoStats() { return this.client.getLocalVideoStats(); }
-  getRemoteVideoStats() { return this.client.getRemoteVideoStats(); }
+  getRemoteVideoStats() {
+    const result: Record<string, RemoteVideoStats> = {};
+    for (const [uid, stats] of Object.entries(this.client.getRemoteVideoStats())) {
+      result[uid] = {
+        receiveResolutionWidth:Math.round(stats.receiveResolutionWidth || 0),
+        receiveResolutionHeight:Math.round(stats.receiveResolutionHeight || 0),
+        receiveFrameRate:stats.receiveFrameRate || 0, decodeFrameRate:stats.decodeFrameRate,
+        codecType:stats.codecType, receiveBitrate:Math.round(stats.receiveBitrate || 0),
+        // Agora reports packet loss as a 0..1 fraction; the UI prints percent.
+        packetLossRate:(stats.packetLossRate || 0) * 100, currentPacketLossRate:(stats.currentPacketLossRate || 0) * 100,
+        receiveDelay:Math.round(stats.receiveDelay || 0), transportDelay:Math.round(stats.transportDelay || 0),
+        end2EndDelay:Math.round(stats.end2EndDelay || 0),
+      };
+    }
+    return result;
+  }
 }

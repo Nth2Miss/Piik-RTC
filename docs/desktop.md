@@ -53,11 +53,11 @@ Piik-RTC-v<版本>.exe（C# / .NET Framework 4.8 / WinForms / WebView2）
         └─ PCM → 主程序 → WebView2 消息
 ```
 
-渲染端优先使用 Windows Graphics Capture 采集 GPU 画面：BGRA 帧通过 WebView2 共享内存传给前端，直接以 `VideoFrame` 画到隐藏 canvas，再通过 `canvas.captureStream()` 交给 RTC SDK，只编码一次，不再经过 JPEG。选择 1440P/原画或 WGC 不可用时，回退到 GDI+ + JPEG 桥接。音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给 RTC SDK。即构房间的共享画面最高为 1080P、码率最高为 10 Mbps，选择 1440P/原画或 12/16 Mbps 时会自动按 1080P / 10 Mbps 采集。
+渲染端优先使用 Windows Graphics Capture 采集 GPU 画面：BGRA 帧通过 WebView2 共享内存传给前端，优先写入 `MediaStreamTrackGenerator`（Insertable Streams）直接交给 RTC SDK；不支持时退回隐藏 canvas + `canvas.captureStream()`。两条路径都只编码一次，不再经过 JPEG。选择 1440P/原画或 WGC 不可用时，回退到 GDI+ + JPEG 桥接。音频 PCM 经过 AudioWorklet 和 `MediaStreamAudioDestinationNode`，同样交给 RTC SDK。即构房间的共享画面最高为 1080P、码率最高为 10 Mbps，选择 1440P/原画或 12/16 Mbps 时会自动按 1080P / 10 Mbps 采集。
 
 ## 原生采集
 
-- **画面**：优先使用 Windows Graphics Capture 捕获窗口或显示器，GPU 帧按目标分辨率等比缩放（不放大）后以 BGRA 通过共享内存交给前端；WGC 不可用或选择 1440P/原画时回退到 `PrintWindow(PW_RENDERFULLCONTENT)` / `CopyFromScreen` + JPEG（质量约 72）。最小化的窗口不会出现在列表里；个别受保护或特殊渲染的窗口可能返回黑帧。
+- **画面**：优先使用 Windows Graphics Capture 捕获窗口或显示器，GPU 帧按目标分辨率等比缩放（不放大）后以 BGRA 通过共享内存交给前端；支持 Insertable Streams 时直接写入 `MediaStreamTrackGenerator`，不支持时画到隐藏 canvas 再 `captureStream()`。主窗口被最小化或遮挡时 WebView2 的后台/遮挡节流已关闭，避免采集帧率跟着页面渲染一起下降。WGC 不可用或选择 1440P/原画时回退到 `PrintWindow(PW_RENDERFULLCONTENT)` / `CopyFromScreen` + JPEG（质量约 72）。最小化的窗口不会出现在列表里；个别受保护或特殊渲染的窗口可能返回黑帧。
 - **音频**：与网页版相同的 WASAPI shared-mode 回环。系统模式请求 48 kHz / 16-bit / stereo，失败时回退 44.1 kHz；程序模式使用 Windows 进程回环的 include/exclude 进程树。
 - **语音过滤**：一次排除一个进程树，默认选择检测到的 Oopz / KOOK 等语音软件。语音软件重启后，请停止并重新开始共享。
 - **声音来源**：选择窗口时可以只共享该程序的声音；选择屏幕时可以共享整个系统声音并选择要过滤的语音软件。
@@ -107,7 +107,7 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 | 主机 + WebView2 托管 DLL | 约 0.6 MB |
 | WebView2 运行时 | 系统自带，不随程序分发 |
 
-这比 Electron 方案的安装包（约 112 MB）小一个数量级。桌面端仍要通过 WebView2 和 canvas 中转画面，但 1080P/60fps 及以下使用 WGC 原始帧路径，不再经过 JPEG；1440P/原画会回退到 JPEG 桥接，CPU 占用更高。
+这比 Electron 方案的安装包（约 112 MB）小一个数量级。桌面端仍要通过 WebView2 中转画面，但 1080P/60fps 及以下使用 WGC 原始帧路径，不再经过 JPEG；支持 Insertable Streams 时直接写入生成器轨道，避免窗口最小化/遮挡时 canvas 渲染被节流，不支持时退回 canvas。1440P/原画会回退到 JPEG 桥接，CPU 占用更高。
 
 ## 限制与排障
 
