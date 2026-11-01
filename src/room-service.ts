@@ -527,11 +527,26 @@ export function createRoomService() {
       bitrate:(isZego ? Math.min(requestedBitrate, ZEGO_MAX_BITRATE) : requestedBitrate) as Preferences['bitrate'],
     };
     if (isZego && requestedBitrate > ZEGO_MAX_BITRATE) notify(`即构共享码率最高为 ${ZEGO_MAX_BITRATE / 1000} Mbps，已按该码率发送。`);
-    // Capture first: getDisplayMedia must run while the click's activation is still valid.
+    // The browser picker must open while the click's activation is valid. The
+    // desktop picker can connect and configure the screen encoder first, so the
+    // first keyframe does not start at Volc's low default resolution.
     const captureTracks = (state.room?.provider || 'agora') === 'agora' ? getAgoraSdk() : browserCaptureTracks;
-    const next = selection
-      ? await captureDesktopScreen(selection, sharePreferences, captureTracks, message => notify(message, true))
-      : await captureScreen(sharePreferences, captureTracks, undefined, undefined, isZego);
+    let connectedBeforeCapture = false;
+    if (selection && !state.connected) { await connectMedia(); connectedBeforeCapture = true; }
+    if (selection) {
+      try { await client.prepareScreen(sharePreferences); }
+      catch { /* publish applies the exact encoder config again */ }
+    }
+    const next = await (async (): Promise<Awaited<ReturnType<typeof captureScreen>>> => {
+      try {
+        return selection
+          ? await captureDesktopScreen(selection, sharePreferences, captureTracks, message => notify(message, true))
+          : await captureScreen(sharePreferences, captureTracks, undefined, undefined, isZego);
+      } catch (error) {
+        if (connectedBeforeCapture) await disconnectMedia();
+        throw error;
+      }
+    })();
     const video = next.tracks[0] as LocalVideoTrack;
     let ended = false;
     next.onEnded(() => { ended = true; if (tracks.includes(video)) void stop(); });

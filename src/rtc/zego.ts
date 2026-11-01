@@ -1,5 +1,5 @@
 import type { ZegoExpressEngine } from 'zego-express-engine-webrtc';
-import { effectiveBitrate, videoOptimization, ZEGO_MAX_BITRATE, type Preferences } from '../preferences';
+import { encoderConfig, effectiveBitrate, videoOptimization, ZEGO_MAX_BITRATE, type Preferences } from '../preferences';
 import { browserAudioTrack, browserVideoTrack, StatsCache } from './browser';
 import type { LocalTrack, MediaKind, RemoteVideoStats, RtcAdapter, RtcEventSink, RtcRemoteUser, ZegoPull } from './types';
 
@@ -77,12 +77,26 @@ export class ZegoRtcAdapter implements RtcAdapter {
   async publish(tracks: LocalTrack[], preferences?: Preferences) {
     const engine = this.requireEngine();
     const raw = tracks.map(track => track.getMediaStreamTrack());
+    const video = raw.find(track => track.kind === 'video');
+    const config = preferences && video ? encoderConfig(preferences, video.getSettings()) : undefined;
     const stream = await engine.createStream({ custom: {
       source:new MediaStream(raw),
       ...(preferences ? { bitrate:Math.min(effectiveBitrate(preferences), ZEGO_MAX_BITRATE), audioBitrate:128,
         videoOptimizationMode:videoOptimization(preferences) === 'motion' ? 'motion' : preferences.optimization === 'detail' ? 'detail' : 'default' } : {}),
     } });
     this.local = stream;
+    if (config && preferences) {
+      try {
+        // Without an explicit video config Zego can start the custom stream at
+        // its default resolution/frame rate, which is visible as a blurry
+        // first share. Set it before publishing.
+        await engine.setVideoConfig(stream, {
+          width:Number(config.width) || 1280, height:Number(config.height) || 720,
+          frameRate:Number(config.frameRate) || 30,
+          maxBitrate:Math.min(effectiveBitrate(preferences), ZEGO_MAX_BITRATE),
+        });
+      } catch { /* older Zego SDKs apply the config after publishing */ }
+    }
     if (!engine.startPublishingStream(`${this.room}_${this.uid}`, stream)) { engine.destroyStream(stream); this.local = undefined; throw new Error('即构推流失败。'); }
   }
   async unpublish(_tracks: LocalTrack[]) {

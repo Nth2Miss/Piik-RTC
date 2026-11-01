@@ -97,6 +97,7 @@ export interface RtcAdapter {
   readonly zegoPulls?: ZegoPull[];
   join(appId: string | number, room: string, token: string, uid: number): Promise<UID>;
   leave(): Promise<void>;
+  prepareScreen?(preferences: Preferences): Promise<void>;
   publish(tracks: LocalTrack[], preferences?: Preferences): Promise<void>;
   unpublish(tracks: LocalTrack[]): Promise<void>;
   subscribe(user: RtcRemoteUser, kind: MediaKind): Promise<void>;

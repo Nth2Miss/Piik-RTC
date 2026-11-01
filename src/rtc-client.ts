@@ -36,6 +36,7 @@ export class RtcClient {
     return this.current().join(appId, room, token, uid);
   }
   leave() { return this.adapter?.leave() ?? Promise.resolve(); }
+  prepareScreen(preferences: Preferences) { return this.adapter?.prepareScreen?.(preferences) ?? Promise.resolve(); }
   publish(tracks: LocalTrack[], preferences?: Preferences) { return this.current().publish(tracks, preferences); }
   unpublish(tracks: LocalTrack[]) { return this.current().unpublish(tracks); }
   subscribe(user: RtcRemoteUser, kind: MediaKind) { return this.current().subscribe(user, kind); }

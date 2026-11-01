@@ -78,6 +78,16 @@ export class VolcRtcAdapter implements RtcAdapter {
     this.remotes.clear(); this.localQuality = 0; this.remoteQuality.clear(); this.remoteScreen.clear(); this.cache.clear();
     this.events.emit('billing-change'); this.events.emit('connection-state-change', 'DISCONNECTED');
   }
+  async prepareScreen(preferences: Preferences) {
+    const { engine } = this.context();
+    const config = encoderConfig(preferences);
+    const contentHint = videoContentHint(preferences);
+    await engine.setScreenEncoderConfig({
+      width:Number(config.width) || 1920, height:Number(config.height) || 1080,
+      frameRate:Number(config.frameRate) || 30, maxKbps:effectiveBitrate(preferences),
+      ...(contentHint ? { contentHint } : {}),
+    });
+  }
   async publish(tracks: LocalTrack[], preferences?: Preferences) {
     const { engine, sdk } = this.context(), index = sdk.StreamIndex.STREAM_INDEX_SCREEN;
     const raw = tracks.map(track => track.getMediaStreamTrack());
