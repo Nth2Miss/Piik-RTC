@@ -8,6 +8,7 @@ interface NativeVideo {
   track: MediaStreamTrack;
   width: number;
   height: number;
+  firstFrame: Promise<void>;
   onEnded: (handler: () => void) => void;
   stop: () => Promise<void>;
 }
@@ -135,6 +136,14 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
   let pendingFrame: DesktopVideoFrame | null = null;
   let writingRaw = false;
   let latestRaw: VideoFrame | null = null;
+  let firstFrameDone = false;
+  let resolveFirstFrame: () => void = () => {};
+  const firstFrame = new Promise<void>(resolve => { resolveFirstFrame = resolve; });
+  const settleFirstFrame = () => {
+    if (firstFrameDone) return;
+    firstFrameDone = true;
+    resolveFirstFrame();
+  };
 
   // Keep only the newest frame while the previous one is being consumed.
   const queueRaw = (frame: VideoFrame, consume: (frame: VideoFrame) => void | Promise<void>) => {
@@ -148,7 +157,7 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
         const next = latestRaw;
         latestRaw = null;
         try { await consume(next); } catch { /* a bad frame must not stop the share */ }
-        finally { next.close(); }
+        finally { next.close(); settleFirstFrame(); }
       }
       writingRaw = false;
     })();
@@ -191,6 +200,7 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
       if (!stopped && context) {
         context.drawImage(bitmap, 0, 0, width, height);
         requestFrame();
+        settleFirstFrame();
       }
       bitmap.close();
     } catch {
@@ -234,6 +244,7 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
     track,
     width,
     height,
+    firstFrame,
     onEnded: handler => {
       endedHandler = handler;
       if (ended) handler();
@@ -295,6 +306,11 @@ export async function captureDesktopScreen(
 
   try {
     video = await startNativeVideo(bridge, selection, preferences);
+    // Let the first captured frame reach the generator/canvas before the RTC
+    // SDK creates its encoder. On the first publish after joining, starting
+    // with an empty track can leave Volc at its low default profile until the
+    // user shares again.
+    await Promise.race([video.firstFrame, new Promise<void>(resolve => setTimeout(resolve, 1500))]);
     video.track.contentHint = sourceContentHint(preferences);
     const config = encoderConfig(preferences, { width: video.width, height: video.height });
     const videoTrack = sdk.createCustomVideoTrack({
