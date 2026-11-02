@@ -93,6 +93,8 @@ namespace PiikDesktop
         private const int ThumbnailHeight = 203;
         private static readonly Dictionary<int, (string Name, string Exe)> ProcessCache = new Dictionary<int, (string, string)>();
         private static readonly Dictionary<string, string> IconCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<IntPtr, (string Data, DateTime At)> MinimizedThumbnailCache = new Dictionary<IntPtr, (string, DateTime)>();
+        private static readonly object MinimizedThumbnailGate = new object();
 
         private static readonly HashSet<string> VoiceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -154,8 +156,17 @@ namespace PiikDesktop
                 var minimized = Win32.IsIconic(window.Hwnd);
                 string thumbnail = "";
                 var windowWatch = Stopwatch.StartNew();
-                try { thumbnail = WindowThumbnail(window.Hwnd); } catch (Exception exception) { Log.Write("window thumbnail failed: " + exception.Message); }
-                if (windowWatch.ElapsedMilliseconds > 200) Log.Write("window thumbnail slow: " + windowWatch.ElapsedMilliseconds + "ms " + window.Title);
+                try
+                {
+                    if (minimized) thumbnail = MinimizedWindowThumbnail(window.Hwnd);
+                    else
+                    {
+                        lock (MinimizedThumbnailGate) MinimizedThumbnailCache.Remove(window.Hwnd);
+                        thumbnail = WindowThumbnail(window.Hwnd);
+                    }
+                }
+                catch (Exception exception) { Log.Write("window thumbnail failed: " + exception.Message); }
+                if (windowWatch.ElapsedMilliseconds > 400) Log.Write("window thumbnail slow: " + windowWatch.ElapsedMilliseconds + "ms " + window.Title);
                 result.Sources.Add(new DesktopSource
                 {
                     Id = "window:" + window.Hwnd.ToInt64(),
@@ -343,6 +354,48 @@ namespace PiikDesktop
 
         [DllImport("user32.dll")]
         private static extern bool GetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
+
+        private static string MinimizedWindowThumbnail(IntPtr hwnd)
+        {
+            lock (MinimizedThumbnailGate)
+            {
+                if (MinimizedThumbnailCache.TryGetValue(hwnd, out var cached) && (DateTime.UtcNow - cached.At).TotalSeconds < 40)
+                    return cached.Data;
+            }
+            if (!Win32.IsWindowVisible(hwnd) || !Responsive(hwnd)) return "";
+            var previous = Win32.GetForegroundWindow();
+            var data = "";
+            try
+            {
+                // WM_PRINT generally fails while a window is minimized. Restore it
+                // without activation, capture it behind the picker, then minimize.
+                Win32.ShowWindow(hwnd, Win32.SwShowNoActivate);
+                if (previous != IntPtr.Zero && previous != hwnd)
+                    Win32.SetWindowPos(hwnd, previous, 0, 0, 0, 0, Win32.SwpNomove | Win32.SwpNosize | Win32.SwpNoactivate);
+                if (Win32.GetForegroundWindow() == hwnd) BringToForeground(previous);
+                try { Win32.DwmFlush(); } catch { }
+                Thread.Sleep(120);
+                data = WindowThumbnail(hwnd);
+            }
+            catch { }
+            finally
+            {
+                try { if (!Win32.IsIconic(hwnd)) Win32.ShowWindow(hwnd, Win32.SwMinimize); } catch { }
+            }
+            lock (MinimizedThumbnailGate) MinimizedThumbnailCache[hwnd] = (data, DateTime.UtcNow);
+            return data;
+        }
+
+        private static void BringToForeground(IntPtr target)
+        {
+            if (target == IntPtr.Zero) return;
+            var foreground = Win32.GetForegroundWindow();
+            var foregroundThread = Win32.GetWindowThreadProcessId(foreground, out _);
+            var currentThread = Win32.GetCurrentThreadId();
+            var attached = foregroundThread != 0 && foregroundThread != currentThread && Win32.AttachThreadInput(currentThread, foregroundThread, true);
+            try { Win32.SetForegroundWindow(target); }
+            finally { if (attached) Win32.AttachThreadInput(currentThread, foregroundThread, false); }
+        }
 
         private static string WindowThumbnail(IntPtr hwnd)
         {
