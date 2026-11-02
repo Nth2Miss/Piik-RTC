@@ -355,8 +355,11 @@ namespace PiikDesktop
         [DllImport("user32.dll")]
         private static extern bool GetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
 
-        [DllImport("user32.dll")]
-        private static extern bool SetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
+        [DllImport("ole32.dll")]
+        private static extern int CoInitializeEx(IntPtr reserved, uint coInit);
+
+        [DllImport("ole32.dll")]
+        private static extern void CoUninitialize();
 
         private static string MinimizedWindowThumbnail(IntPtr hwnd)
         {
@@ -367,54 +370,112 @@ namespace PiikDesktop
             }
             if (!Win32.IsWindowVisible(hwnd) || !Responsive(hwnd)) return "";
             var data = "";
-            var placement = new WindowPlacement { Length = Marshal.SizeOf(typeof(WindowPlacement)) };
-            if (GetWindowPlacement(hwnd, ref placement))
-            {
-                var original = placement;
-                var normal = placement.NormalPosition;
-                var width = Math.Max(2, normal.Right - normal.Left);
-                var height = Math.Max(2, normal.Bottom - normal.Top);
-                // Restore off-screen so the user never sees a row of minimized
-                // windows popping out while the picker collects thumbnails.
-                // WPF_RESTORETOMAXIMIZED would bring a maximized-then-minimized
-                // window back full-screen instead of the off-screen rect.
-                placement.Flags &= ~2;
-                placement.ShowCmd = Win32.SwShowNoActivate;
-                placement.NormalPosition.Left = -32000;
-                placement.NormalPosition.Top = -32000;
-                placement.NormalPosition.Right = -32000 + width;
-                placement.NormalPosition.Bottom = -32000 + height;
-                // Move while still minimized so a clamping app never paints at
-                // its normal position; the placement then restores off-screen.
-                Win32.SetWindowPos(hwnd, IntPtr.Zero, -32000, -32000, width, height,
-                    Win32.SwpNozorder | Win32.SwpNoactivate | Win32.SwpNoSendChanging);
-                try
-                {
-                    if (SetWindowPlacement(hwnd, ref placement))
-                    {
-                        // Chromium/Electron clamp WM_WINDOWPOSCHANGING back into
-                        // the work area; suppress that message while forcing the
-                        // window off-screen.
-                        Win32.SetWindowPos(hwnd, IntPtr.Zero, -32000, -32000, width, height,
-                            Win32.SwpNozorder | Win32.SwpNoactivate | Win32.SwpNoSendChanging);
-                        Thread.Sleep(100);
-                        if (Win32.GetWindowRect(hwnd, out var current) && current.Left > -30000)
-                        {
-                            // The app refused to stay off-screen; skip the capture
-                            // instead of pulling it in front of the user.
-                            data = "";
-                        }
-                        else data = WindowThumbnail(hwnd);
-                    }
-                }
-                catch { }
-                finally
-                {
-                    try { SetWindowPlacement(hwnd, ref original); } catch { }
-                }
-            }
+            try { data = ThumbnailViaDwmHost(hwnd); }
+            catch (Exception exception) { Log.Write("dwm thumbnail failed: " + exception.Message); }
             lock (MinimizedThumbnailGate) MinimizedThumbnailCache[hwnd] = (data, DateTime.UtcNow);
             return data;
+        }
+
+        private static string ThumbnailViaDwmHost(IntPtr source)
+        {
+            var previous = Win32.GetForegroundWindow();
+            if (previous == IntPtr.Zero) return "";
+            var hostWidth = 720;
+            var hostHeight = 406;
+            var x = 40;
+            var y = 40;
+            if (previous != IntPtr.Zero && Win32.GetWindowRect(previous, out var foreground) && foreground.Right > foreground.Left && foreground.Bottom > foreground.Top)
+            {
+                hostWidth = Math.Max(320, Math.Min(720, foreground.Width - 80));
+                hostHeight = Math.Max(180, Math.Min(406, foreground.Height - 80));
+                x = foreground.Left + 40;
+                y = foreground.Top + 40;
+            }
+            // The host stays behind the picker window; the source window is never
+            // restored or activated. DWM composes the thumbnail into the host and
+            // WGC captures the host frame.
+            var host = Win32.CreateWindowEx(Win32.WsExNoActivate, "STATIC", "", Win32.WsPopup | Win32.SsBlackRect,
+                x, y, hostWidth, hostHeight, IntPtr.Zero, IntPtr.Zero, Win32.GetModuleHandle(null), IntPtr.Zero);
+            if (host == IntPtr.Zero) return "";
+            IntPtr thumbnail = IntPtr.Zero;
+            try
+            {
+                Win32.ShowWindow(host, Win32.SwShowNoActivate);
+                if (previous != IntPtr.Zero)
+                    Win32.SetWindowPos(host, previous, x, y, hostWidth, hostHeight, Win32.SwpNoactivate | Win32.SwpShowWindow);
+                if (Win32.DwmRegisterThumbnail(host, source, out thumbnail) != 0) return "";
+                var properties = new Win32.ThumbnailProperties
+                {
+                    Flags = Win32.DwmTnRectDestination | Win32.DwmTnOpacity | Win32.DwmTnVisible | Win32.DwmTnSourceClientAreaOnly,
+                    Destination = new Win32.Rect { Left = 0, Top = 0, Right = hostWidth, Bottom = hostHeight },
+                    Opacity = 255,
+                    Visible = true,
+                    SourceClientAreaOnly = false,
+                };
+                if (Win32.DwmUpdateThumbnailProperties(thumbnail, ref properties) != 0) return "";
+                Win32.DwmFlush();
+                Thread.Sleep(80);
+                return CaptureHostJpeg(host, hostWidth, hostHeight);
+            }
+            finally
+            {
+                if (thumbnail != IntPtr.Zero) Win32.DwmUnregisterThumbnail(thumbnail);
+                Win32.DestroyWindow(host);
+            }
+        }
+
+        private static string CaptureHostJpeg(IntPtr hwnd, int width, int height)
+        {
+            var com = CoInitializeEx(IntPtr.Zero, 0);
+            try
+            {
+                var source = new DesktopSource { Id = "thumbnail", Kind = "window", Name = "thumbnail", Hwnd = hwnd.ToInt64() };
+                RawVideoFrame captured = null;
+                using (var ready = new ManualResetEventSlim(false))
+                {
+                    var capture = new WgcCapture(source, width, height, 10,
+                        frame =>
+                        {
+                            if (captured == null)
+                            {
+                                captured = new RawVideoFrame
+                                {
+                                    Data = (byte[])frame.Data.Clone(),
+                                    Length = frame.Length,
+                                    Width = frame.Width,
+                                    Height = frame.Height,
+                                    Stride = frame.Stride,
+                                };
+                            }
+                            frame.Release?.Invoke();
+                            ready.Set();
+                        },
+                        info => ready.Set());
+                    try
+                    {
+                        capture.Start();
+                        if (!ready.Wait(1500) || captured == null) return "";
+                    }
+                    catch { return ""; }
+                    finally { try { capture.Stop(); } catch { } }
+                }
+                using (var bitmap = new Bitmap(captured.Width, captured.Height, PixelFormat.Format32bppArgb))
+                {
+                    var bits = bitmap.LockBits(new Rectangle(0, 0, captured.Width, captured.Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                    try
+                    {
+                        for (var row = 0; row < captured.Height; row++)
+                            Marshal.Copy(captured.Data, row * captured.Stride, IntPtr.Add(bits.Scan0, row * bits.Stride), captured.Width * 4);
+                    }
+                    finally { bitmap.UnlockBits(bits); }
+                    if (!HasContent(bitmap)) return "";
+                    return LetterboxJpeg(bitmap);
+                }
+            }
+            finally
+            {
+                if (com >= 0) CoUninitialize();
+            }
         }
 
         private static string WindowThumbnail(IntPtr hwnd)

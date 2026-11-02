@@ -19,6 +19,14 @@ namespace PiikDesktop
         public const uint SwpNoSendChanging = 0x0400;
         public const int SwMinimize = 6;
         public const int SwShowNoActivate = 4;
+        public const int WsPopup = unchecked((int)0x80000000);
+        public const int SsBlackRect = 0x00000004;
+        public const int WsExNoActivate = 0x08000000;
+        public const uint SwpShowWindow = 0x0040;
+        public const int DwmTnRectDestination = 0x00000001;
+        public const int DwmTnOpacity = 0x00000004;
+        public const int DwmTnVisible = 0x00000008;
+        public const int DwmTnSourceClientAreaOnly = 0x00000010;
 
         public delegate bool EnumWindowsProc(IntPtr window, IntPtr lParam);
 
@@ -60,6 +68,35 @@ namespace PiikDesktop
 
         [DllImport("dwmapi.dll")]
         public static extern int DwmFlush();
+
+        [DllImport("user32.dll", EntryPoint = "CreateWindowExW", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr CreateWindowEx(int exStyle, string className, string windowName, int style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+
+        [DllImport("user32.dll")]
+        public static extern bool DestroyWindow(IntPtr window);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr GetModuleHandle(string name);
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmRegisterThumbnail(IntPtr destination, IntPtr source, out IntPtr thumbnail);
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmUnregisterThumbnail(IntPtr thumbnail);
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmUpdateThumbnailProperties(IntPtr thumbnail, ref ThumbnailProperties properties);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct ThumbnailProperties
+        {
+            public int Flags;
+            public Rect Destination;
+            public Rect Source;
+            public byte Opacity;
+            public bool Visible;
+            public bool SourceClientAreaOnly;
+        }
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern int GetWindowTextLength(IntPtr window);
