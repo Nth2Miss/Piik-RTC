@@ -6,6 +6,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -153,11 +154,8 @@ namespace PiikDesktop
                 var minimized = Win32.IsIconic(window.Hwnd);
                 string thumbnail = "";
                 var windowWatch = Stopwatch.StartNew();
-                if (!minimized)
-                {
-                    try { thumbnail = WindowThumbnail(window.Hwnd); } catch (Exception exception) { Log.Write("window thumbnail failed: " + exception.Message); }
-                    if (windowWatch.ElapsedMilliseconds > 200) Log.Write("window thumbnail slow: " + windowWatch.ElapsedMilliseconds + "ms " + window.Title);
-                }
+                try { thumbnail = WindowThumbnail(window.Hwnd); } catch (Exception exception) { Log.Write("window thumbnail failed: " + exception.Message); }
+                if (windowWatch.ElapsedMilliseconds > 200) Log.Write("window thumbnail slow: " + windowWatch.ElapsedMilliseconds + "ms " + window.Title);
                 result.Sources.Add(new DesktopSource
                 {
                     Id = "window:" + window.Hwnd.ToInt64(),
@@ -332,15 +330,43 @@ namespace PiikDesktop
             return Win32.SendMessageTimeout(hwnd, Win32.WmNull, IntPtr.Zero, IntPtr.Zero, Win32.SmtoAbortIfHung, 80, out _) != IntPtr.Zero;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WindowPlacement
+        {
+            public int Length;
+            public int Flags;
+            public int ShowCmd;
+            public Point MinPosition;
+            public Point MaxPosition;
+            public Win32.Rect NormalPosition;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
+
         private static string WindowThumbnail(IntPtr hwnd)
         {
-            Win32.GetWindowRect(hwnd, out var rect);
+            var iconic = Win32.IsIconic(hwnd);
+            Rectangle rect;
+            if (iconic)
+            {
+                var placement = new WindowPlacement { Length = Marshal.SizeOf(typeof(WindowPlacement)) };
+                if (!GetWindowPlacement(hwnd, ref placement)) return "";
+                var normal = placement.NormalPosition;
+                rect = Rectangle.FromLTRB(normal.Left, normal.Top, normal.Right, normal.Bottom);
+            }
+            else
+            {
+                Win32.GetWindowRect(hwnd, out var raw);
+                rect = Rectangle.FromLTRB(raw.Left, raw.Top, raw.Right, raw.Bottom);
+            }
             var width = rect.Width;
             var height = rect.Height;
             if (width <= 1 || height <= 1) return "";
             // PrintWindow blocks until the target window answers WM_PRINT. Skip
-            // minimized or hung windows so one window cannot stall the list.
-            if (Win32.IsIconic(hwnd) || !Responsive(hwnd)) return "";
+            // hung windows so one window cannot stall the list. Minimized windows
+            // are still tried: many apps answer WM_PRINT with their last frame.
+            if (!Responsive(hwnd)) return "";
             using (var source = new Bitmap(width, height, PixelFormat.Format32bppArgb))
             {
                 var captured = false;
@@ -350,7 +376,7 @@ namespace PiikDesktop
                     try { captured = Win32.PrintWindow(hwnd, deviceContext, Win32.PwRenderFullContent); }
                     finally { graphics.ReleaseHdc(deviceContext); }
                 }
-                if (!captured)
+                if (!captured && !iconic)
                 {
                     try
                     {
@@ -362,9 +388,24 @@ namespace PiikDesktop
                     }
                     catch { }
                 }
-                if (!captured) return "";
+                if (!captured || !HasContent(source)) return "";
                 return LetterboxJpeg(source);
             }
+        }
+
+        private static bool HasContent(Bitmap bitmap)
+        {
+            var stepX = Math.Max(1, bitmap.Width / 24);
+            var stepY = Math.Max(1, bitmap.Height / 24);
+            for (var y = 0; y < bitmap.Height; y += stepY)
+            {
+                for (var x = 0; x < bitmap.Width; x += stepX)
+                {
+                    var pixel = bitmap.GetPixel(x, y);
+                    if (pixel.A > 16 && (pixel.R > 8 || pixel.G > 8 || pixel.B > 8)) return true;
+                }
+            }
+            return false;
         }
 
         private static string ScreenThumbnail(Rectangle bounds)
