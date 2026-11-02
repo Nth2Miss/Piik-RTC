@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { browserCaptureTracks, captureScreen, displayOptions, knownWindowAudioSupport } from '../../src/capture.ts';
-import { defaults, normalizePreferences } from '../../src/preferences.ts';
+import { defaults, normalizePreferences, automaticBitrate, effectiveBitrate } from '../../src/preferences.ts';
+
+test('1080p60 自动提高到 16Mbps，低帧率和用户手动码率保留', () => {
+  assert.equal(automaticBitrate({...defaults,fps:60}),16000);
+  assert.equal(automaticBitrate({...defaults,fps:30}),5000);
+  assert.equal(automaticBitrate({...defaults,resolution:'720',fps:60}),5000);
+  assert.equal(effectiveBitrate({...defaults,fps:60,bitrateMode:'manual',bitrate:8000}),8000);
+});
 
 function fakeCapture(surface, hasAudio = true) {
   const rawVideo = Object.assign(new EventTarget(), { readyState: 'live', stopped: false,
@@ -96,7 +103,7 @@ test('即构采集限制 1080P，并在无法保证分辨率时释放轨道', as
   assert.equal(oversized.rawVideo.stopped, true);
   assert.equal(oversized.rawAudio.stopped, true);
 });
-test('1080p60 均衡采集限制高分屏输入，并向编码器传递流畅策略和实际比例', async () => {
+test('1080p60 均衡采集限制高分屏输入，并保留均衡策略和实际比例', async () => {
   const fake = fakeCapture('monitor', false);
   fake.rawVideo.getSettings = () => ({displaySurface:'monitor',width:3440,height:1440});
   fake.rawVideo.applyConstraints = async constraints => {
@@ -105,7 +112,7 @@ test('1080p60 均衡采集限制高分屏输入，并向编码器传递流畅策
   };
   const capture = await captureScreen({...defaults, fps:60, optimization:'balanced'}, fake.sdk, async () => fake.stream);
   assert.equal(fake.rawVideo.contentHint, '');
-  assert.equal(fake.created[0][1].optimizationMode, 'motion');
+  assert.equal(fake.created[0][1].optimizationMode, 'balanced');
   assert.equal(fake.created[0][1].frameRate, 60);
   assert.equal(fake.created[0][1].height, 804);
   capture.close();

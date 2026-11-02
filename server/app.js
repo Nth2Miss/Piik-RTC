@@ -8,7 +8,7 @@ import { createUsageService } from './quota/usage.js';
 import { agoraToken } from './providers/agora/token.js';
 import { zegoToken } from './providers/zego/token.js';
 import { volcToken } from './providers/volc/token.js';
-import { QuotaMonitor, normalizeMedia, QUOTA_RESERVE_MINUTES } from './quota/monitor.js';
+import { QuotaMonitor, QUOTA_RESERVE_MINUTES } from './quota/monitor.js';
 import { clientIp, logEvent, providerLabel, roomLabel } from './shared/log.js';
 
 const secret = () => randomBytes(24).toString('base64url');
@@ -127,9 +127,10 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     res.json({ name });
   });
   app.use('/api/rooms', (req, res, next) => {
-    monitor.account();
     req.profile = store.profile(req.identity);
     if (!req.profile) return res.status(401).json({ error: '请先输入用户名，再选择房间。' });
+    // Unchanged heartbeats only extend presence; state transitions settle in updatePresence.
+    if (req.method !== 'POST' || !/^\/[^/]+\/presence\/?$/.test(req.path)) monitor.account();
     next();
   });
   app.get('/api/rooms', (req, res) => {
@@ -215,12 +216,8 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   });
   app.post('/api/rooms/:id/presence', access, ownSession, (req, res) => {
     if (req.session.expiresAt <= Date.now()) return res.status(403).json({ error: 'Token 已到期，请重新进入房间。' });
-    req.session.lastSeen = Date.now();
-    const sharing = req.body.sharing === true;
-    if (sharing !== req.session.sharing) logEvent(sharing ? '开始共享' : '结束共享',
+    if (monitor.updatePresence(req.session, req.body)) logEvent(req.session.sharing ? '开始共享' : '结束共享',
       { ip:clientIp(req), room:roomLabel(req.room), name:req.session.name, provider:providerLabel(req.room.provider) });
-    req.session.sharing = sharing;
-    if (req.body.media && typeof req.body.media === 'object') req.session.media = normalizeMedia(req.body.media);
     store.occupied(req.room.id, Date.now());
     app.locals.notifyRoom(req.room.id);
     res.json({ participants: participants(req.room.id), room: publicRoom(store.get(req.room.id), req.identity), quotaHealthy:monitor.healthy() });

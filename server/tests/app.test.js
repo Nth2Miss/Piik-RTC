@@ -40,6 +40,21 @@ function privileges(token) {
   for (let i = 0; i < count; i++) { result.push(u16()); offset += 4; }
   return result;
 }
+test('HTTP 重复心跳不触发全量用量结算，媒体状态变化仍会结算', async t => {
+  const {app,owner} = await server(t);
+  const room = (await owner('/api/rooms',{name:'心跳测试'})).data;
+  const token = (await owner(`/api/rooms/${room.id}/token`,{})).data;
+  const payload = {sessionKey:token.sessionKey,sharing:false,media:{connected:true}};
+  assert.equal((await owner(`/api/rooms/${room.id}/presence`,payload)).status, 200);
+  let accounts = 0;
+  const account = app.locals.monitor.account.bind(app.locals.monitor);
+  app.locals.monitor.account = (...args) => { accounts++; return account(...args); };
+  for (let i = 0; i < 10; i++) assert.equal((await owner(`/api/rooms/${room.id}/presence`,payload)).status, 200);
+  assert.equal(accounts, 0);
+  assert.equal((await owner(`/api/rooms/${room.id}/presence`,{...payload,media:{connected:false}})).status, 200);
+  assert.equal(accounts, 1);
+});
+
 test('configuration contains no credentials and missing config fails explicitly', async t => {
   const { owner } = await server(t, {});
   const config = await owner('/api/config');

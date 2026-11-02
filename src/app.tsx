@@ -16,7 +16,7 @@ import { DesktopCapturePicker } from './desktop/CapturePicker.tsx';
 import { isDesktopApp, type CaptureSelection } from './desktop/bridge.ts';
 import { usernameError } from './username';
 import type { Room, RtcProvider } from './types';
-import { PlaybackSampler } from './playback-stats';
+import { PlaybackSampler, formatFps } from './playback-stats';
 
 const appVersion = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
 
@@ -223,9 +223,8 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
 }
 const qualityLabels = ['未知', '极佳', '优秀', '良好', '一般', '较差', '已断开'];
 const formatSize = (width: number, height: number) => width > 0 && height > 0 ? `${width}×${height}` : '—';
-const formatFps = (value?: number) => value && value > 0 ? `${Math.round(value)} fps` : '—';
 const formatBitrate = (value?: number) => value && value > 0 ? `${(value / 1_000_000).toFixed(1)} Mbps` : '—';
-const formatBandwidth = (kbps: number) => kbps > 0 ? (kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} Kbps`) : '—';
+const formatBandwidth = (kbps?: number) => kbps !== undefined && kbps > 0 ? (kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} Kbps`) : '—';
 const formatPercent = (value: number) => Number.isFinite(value) && value > 0 ? `${value.toFixed(value >= 10 ? 0 : 2)}%` : '0%';
 const surfaceLabel = (surface: string) => surface === 'monitor' ? '屏幕' : surface === 'window' ? '窗口' : surface === 'browser' ? '标签页' : '未知来源';
 function ConnectionDetails({ state, service, close }: { state:RoomState; service:RoomService; close:() => void }) {
@@ -243,7 +242,7 @@ function ConnectionDetails({ state, service, close }: { state:RoomState; service
         <dt>采集帧率</dt><dd>{formatFps(local.captureFrameRate)}</dd>
         <dt>发送帧率</dt><dd>{formatFps(local.sendFrameRate)}</dd>
         <dt>视频编码</dt><dd>{local.codec || '—'}</dd>
-        <dt>发送码率</dt><dd>{formatBitrate(local.sendBitrate)}{local.targetBitrate > 0 ? ` / ${formatBitrate(local.targetBitrate)}` : ''}</dd>
+        <dt>发送码率</dt><dd>{formatBitrate(local.sendBitrate)}{(local.targetBitrate ?? 0) > 0 ? ` / ${formatBitrate(local.targetBitrate)}` : ''}</dd>
         <dt>来源声音</dt><dd>{local.hasAudio ? '已包含' : '未包含'}</dd>
         <dt>采集来源</dt><dd>{surfaceLabel(local.surface)}</dd>
       </dl> : <p className="sw-connection-empty">{state.sharing ? '正在获取采集统计…' : '当前没有共享画面。'}</p>}</section>
@@ -259,7 +258,7 @@ function ConnectionDetails({ state, service, close }: { state:RoomState; service
         <dt>端到端延迟</dt><dd>{remote.endToEndDelay > 0 ? `${remote.endToEndDelay} ms` : '—'}</dd>
       </dl> : <p className="sw-connection-empty">{state.video ? (state.selected === state.uid ? '正在预览自己的共享。' : '正在等待远端统计…') : '当前没有观看画面。'}</p>}</section>
       <section className="sw-connection-card"><h3><Glyph name="network"/>网络</h3>{network ? <dl>
-        <dt>往返时延</dt><dd>{network.rtt > 0 ? `${network.rtt} ms` : '—'}</dd>
+        <dt>往返时延</dt><dd>{network.rtt !== undefined ? `${network.rtt} ms` : '—'}</dd>
         <dt>上行可用带宽</dt><dd>{formatBandwidth(network.uplinkKbps)}</dd>
         <dt>发送码率</dt><dd>{formatBitrate(network.sendBitrate)}</dd>
         <dt>接收码率</dt><dd>{formatBitrate(network.recvBitrate)}</dd>
@@ -283,7 +282,7 @@ function Settings({ state, service, close }: { state:RoomState; service:RoomServ
     };
   });
   const change = (patch:Partial<Preferences>, immediate = false) => { setDraft(previous => ({ ...previous,...patch })); if (immediate) service.savePreferences({ ...state.preferences,...patch }); };
-  const presets:[string,Preferences['resolution'],Preferences['fps'],Preferences['bitrate']][] = [['轻量','720',30,3000],['高清','1080',30,5000],['高帧率','1080',60,8000]];
+  const presets:[string,Preferences['resolution'],Preferences['fps'],Preferences['bitrate']][] = [['轻量','720',30,3000],['高清','1080',30,5000],['高帧率','1080',60,16000]];
   const presetNodes = <div className="lr-tiles">{presets.map(([title,resolution,fps,bitrate]) => <button type="button" key={title} className={`lr-tile${draft.bitrateMode === 'auto' && draft.resolution === resolution && draft.fps === fps ? ' is-selected' : ''}`} aria-pressed={draft.bitrateMode === 'auto' && draft.resolution === resolution && draft.fps === fps} onClick={() => change({ resolution,fps,bitrate,bitrateMode:'auto' })}><QualityTileGlyph resolution={`${resolution}p`} framerate={fps}/><strong>{title}</strong><small>{resolution}p {fps} 帧</small></button>)}</div>;
   const resolutionOptions = ([['480','480p'],['720','720p'],['1080','1080p'],['1440','1440p'],...(isDesktopApp ? [['native','原画'] as [Preferences['resolution'],string]] : [])] as [Preferences['resolution'],string][]).filter(([value]) => !isZego || (value !== '1440' && value !== 'native'));
   const autoBitrate = Math.min(automaticBitrate(draft), isZego ? ZEGO_MAX_BITRATE : 16000) as Preferences['bitrate'];

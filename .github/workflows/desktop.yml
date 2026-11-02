@@ -3,12 +3,12 @@ name: Desktop
 on:
   workflow_dispatch:
     inputs:
-      build_label:
-        description: 构建说明（可选，用于区分运行记录）
-        required: false
+      version:
+        description: 发布版本（与 package.json 一致，如 1.1.6 或 v1.1.6）
+        required: true
         type: string
 
-run-name: Desktop · ${{ inputs.build_label || github.ref_name }} · #${{ github.run_number }}
+run-name: Piik-RTC-${{ startsWith(inputs.version, 'v') && inputs.version || format('v{0}', inputs.version) }}
 
 concurrency:
   group: desktop-${{ github.ref }}
@@ -18,10 +18,26 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Validate release version
+        id: version
+        env:
+          PIIK_RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/desktop-version.mjs
   checks:
+    needs: version
     uses: ./.github/workflows/checks.yml
   build:
-    needs: checks
+    needs: [version, checks]
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -45,13 +61,6 @@ jobs:
       - name: Test update integrity
         run: dotnet run --project desktop/tests/UpdateIntegrity.Tests.csproj --configuration Release
 
-      - name: Read package version
-        id: version
-        shell: bash
-        run: |
-          version=$(node -p "require('./package.json').version")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
       - name: Build desktop
         env:
           PIIK_DEFAULT_SERVER_URL: ${{ vars.PIIK_DEFAULT_SERVER_URL }}
@@ -60,19 +69,19 @@ jobs:
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Piik-RTC-desktop-v${{ steps.version.outputs.version }}
+          name: Piik-RTC-desktop-v${{ needs.version.outputs.version }}
           path: |
-            release/Piik-RTC-v${{ steps.version.outputs.version }}.exe
+            release/Piik-RTC-v${{ needs.version.outputs.version }}.exe
             release/version.json
           if-no-files-found: error
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Piik-RTC v${{ steps.version.outputs.version }}
+          tag_name: v${{ needs.version.outputs.version }}
+          name: Piik-RTC v${{ needs.version.outputs.version }}
           files: |
-            release/Piik-RTC-v${{ steps.version.outputs.version }}.exe
+            release/Piik-RTC-v${{ needs.version.outputs.version }}.exe
             release/version.json
           generate_release_notes: true
           fail_on_unmatched_files: true

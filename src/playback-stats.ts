@@ -6,6 +6,8 @@ export interface PlaybackSnapshot {
 }
 interface FrameCounters { totalVideoFrames: number; droppedVideoFrames: number }
 
+export const formatFps = (value?: number) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `${Math.round(value)} fps` : '—';
+
 export class PlaybackSampler {
   private previous?: { at: number; total: number; dropped: number };
   sample(quality: FrameCounters, at: number): PlaybackSnapshot | undefined {

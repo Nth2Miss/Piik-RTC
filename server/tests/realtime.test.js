@@ -110,6 +110,16 @@ test('websocket pushes sharing changes without client polling', async t => {
   hostSocket.send(JSON.stringify({ type: 'presence', sharing: true }));
   const pushed = await update;
   assert.equal(pushed.participants.find(person => person.uid === host.uid).sharing, true);
+  let accounts = 0;
+  const account = app.locals.monitor.account.bind(app.locals.monitor);
+  app.locals.monitor.account = (...args) => { accounts++; return account(...args); };
+  for (let i = 0; i < 10; i++) hostSocket.send(JSON.stringify({type:'presence',sharing:true}));
+  const acknowledged = new Promise(resolve => hostSocket.once('pong',resolve));
+  hostSocket.ping(); await acknowledged;
+  assert.equal(accounts, 0);
+  const stopped = waitFor(guestSocket, message => message.type === 'room' && message.participants.some(person => person.uid === host.uid && !person.sharing));
+  hostSocket.send(JSON.stringify({type:'presence',sharing:false})); await stopped;
+  assert.equal(accounts, 1);
 });
 
 test('达到 500 分钟保护线时通知成员并拒绝房间续期', async t => {

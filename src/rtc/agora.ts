@@ -1,13 +1,17 @@
 import type { IAgoraRTCClient, IAgoraRTCRemoteUser, ILocalAudioTrack, ILocalVideoTrack, UID } from 'agora-rtc-sdk-ng';
-import { loadAgoraSdk } from '../agora-sdk';
+import { loadAgoraSdk } from '../agora-sdk.ts';
+import { SubscriptionTasks } from './subscriptions.ts';
+import { diagnosticNumber, encodingDiagnostics, statisticsObservation } from './diagnostics.ts';
 import type { LocalTrack, MediaKind, RemoteVideoStats, RtcAdapter, RtcEventSink, RtcRemoteUser } from './types';
 
 export class AgoraRtcAdapter implements RtcAdapter {
-  private constructor(private client: IAgoraRTCClient, private events: RtcEventSink) {}
-  static async create(events: RtcEventSink): Promise<AgoraRtcAdapter> {
-    const sdk = await loadAgoraSdk();
+  private client: IAgoraRTCClient;
+  private subscriptions = new SubscriptionTasks();
+  private constructor(client: IAgoraRTCClient) { this.client = client; }
+  static async create(events: RtcEventSink, loadSdk = loadAgoraSdk): Promise<AgoraRtcAdapter> {
+    const sdk = await loadSdk();
     // H.264 is hardware accelerated in desktop Chrome/Edge more often than VP8.
-    const adapter = new AgoraRtcAdapter(sdk.createClient({ mode:'rtc', codec:'h264' }), events);
+    const adapter = new AgoraRtcAdapter(sdk.createClient({ mode:'rtc', codec:'h264' }));
     const client = adapter.client;
     client.on('connection-state-change', current => events.emit('connection-state-change', current));
     client.on('user-joined', () => events.emit('user-joined'));
@@ -22,21 +26,27 @@ export class AgoraRtcAdapter implements RtcAdapter {
   join(appId: string | number, room: string, token: string, uid: number): Promise<UID> {
     return this.client.join(String(appId), room, token, uid);
   }
-  async leave() { await this.client.leave(); }
+  async leave() { this.subscriptions.clear(); await this.client.leave(); }
   async publish(tracks: LocalTrack[]) { await this.client.publish(tracks as (ILocalAudioTrack | ILocalVideoTrack)[]); }
   async unpublish(tracks: LocalTrack[]) { await this.client.unpublish(tracks as (ILocalAudioTrack | ILocalVideoTrack)[]); }
-  async subscribe(user: RtcRemoteUser, kind: MediaKind) {
-    await this.client.subscribe(user as IAgoraRTCRemoteUser, kind);
+  async subscribe(user: RtcRemoteUser, kind: MediaKind, signal?: AbortSignal) {
+    await this.subscriptions.run(user, signal, () => this.client.subscribe(user as IAgoraRTCRemoteUser, kind), () => {},
+      () => this.client.unsubscribe(user as IAgoraRTCRemoteUser, kind));
   }
-  async unsubscribe(user: RtcRemoteUser) { await this.client.unsubscribe(user as IAgoraRTCRemoteUser); }
+  async unsubscribe(user: RtcRemoteUser) { this.subscriptions.cancel(user); await this.client.unsubscribe(user as IAgoraRTCRemoteUser); }
   async renewToken(token: string) { await this.client.renewToken(token); }
   getRTCStats() { return this.client.getRTCStats(); }
   getNetworkQuality() { return this.client.getNetworkQuality(); }
-  getLocalVideoStats() { return this.client.getLocalVideoStats(); }
+  getLocalVideoStats() {
+    const stats = this.client.getLocalVideoStats();
+    return {...stats,observation:statisticsObservation('agora.getLocalVideoStats','poll',Date.now()),
+      diagnostics:encodingDiagnostics({meanEncodeTimeMs:diagnosticNumber(stats.encodeDelay)})};
+  }
   getRemoteVideoStats() {
     const result: Record<string, RemoteVideoStats> = {};
     for (const [uid, stats] of Object.entries(this.client.getRemoteVideoStats())) {
       result[uid] = {
+        observation:statisticsObservation('agora.getRemoteVideoStats','poll',Date.now()),
         receiveResolutionWidth:Math.round(stats.receiveResolutionWidth || 0),
         receiveResolutionHeight:Math.round(stats.receiveResolutionHeight || 0),
         receiveFrameRate:stats.receiveFrameRate || 0, decodeFrameRate:stats.decodeFrameRate,

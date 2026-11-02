@@ -1,13 +1,19 @@
 import type { UID } from 'agora-rtc-sdk-ng';
 import type { Preferences } from './preferences';
 import type { RtcProvider } from './types';
-import { AgoraRtcAdapter } from './rtc/agora';
-import { VolcRtcAdapter } from './rtc/volc';
-import { ZegoRtcAdapter } from './rtc/zego';
+import { AgoraRtcAdapter } from './rtc/agora.ts';
+import { VolcRtcAdapter } from './rtc/volc.ts';
+import { ZegoRtcAdapter } from './rtc/zego.ts';
 import type { LocalTrack, MediaKind, RtcAdapter, RtcEventMap, RtcEventName, RtcEventSink, RtcListener, RtcRemoteUser } from './rtc/types';
 
 /** Keeps room orchestration independent from provider-specific RTC SDKs. */
 export class RtcClient {
+  private loaders: {
+    agora?: Parameters<typeof AgoraRtcAdapter.create>[1];
+    volc?: ConstructorParameters<typeof VolcRtcAdapter>[1];
+    zego?: ConstructorParameters<typeof ZegoRtcAdapter>[1];
+  };
+  constructor(loaders: RtcClient['loaders'] = {}) { this.loaders = loaders; }
   private adapter?: RtcAdapter;
   private handlers = new Map<RtcEventName, unknown[]>();
   private events: RtcEventSink = {
@@ -27,20 +33,18 @@ export class RtcClient {
   }
   get remoteUsers(): RtcRemoteUser[] { return this.adapter?.remoteUsers ?? []; }
   get zegoPulls() { return this.adapter?.zegoPulls; }
-  get firstShareNeedsRetry() { return this.adapter?.firstShareNeedsRetry ?? false; }
   async setProvider(provider: RtcProvider) {
-    if (provider === 'agora') this.adapter = await AgoraRtcAdapter.create(this.events);
-    else if (provider === 'zego') this.adapter = new ZegoRtcAdapter(this.events);
-    else this.adapter = new VolcRtcAdapter(this.events);
+    if (provider === 'agora') this.adapter = await AgoraRtcAdapter.create(this.events, this.loaders.agora);
+    else if (provider === 'zego') this.adapter = new ZegoRtcAdapter(this.events, this.loaders.zego);
+    else this.adapter = new VolcRtcAdapter(this.events, this.loaders.volc);
   }
   join(appId: string | number, room: string, token: string, uid: number): Promise<UID> {
     return this.current().join(appId, room, token, uid);
   }
   leave() { return this.adapter?.leave() ?? Promise.resolve(); }
-  prepareScreen(preferences: Preferences) { return this.adapter?.prepareScreen?.(preferences) ?? Promise.resolve(); }
   publish(tracks: LocalTrack[], preferences?: Preferences, size?: { width:number; height:number }) { return this.current().publish(tracks, preferences, size); }
   unpublish(tracks: LocalTrack[]) { return this.current().unpublish(tracks); }
-  subscribe(user: RtcRemoteUser, kind: MediaKind) { return this.current().subscribe(user, kind); }
+  subscribe(user: RtcRemoteUser, kind: MediaKind, signal?: AbortSignal) { return this.current().subscribe(user, kind, signal); }
   unsubscribe(user: RtcRemoteUser) { return this.current().unsubscribe(user); }
   renewToken(token: string) { return this.current().renewToken(token); }
   getRTCStats(selected?: number) { return this.current().getRTCStats(selected); }

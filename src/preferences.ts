@@ -20,22 +20,21 @@ export const ZEGO_MAX_BITRATE = 10000;
 export const presets: Record<string, Partial<Preferences>> = {
   document: { resolution: '1080', fps: 15, bitrate: 3000, optimization: 'detail' },
   movie: { resolution: '1080', fps: 30, bitrate: 5000, optimization: 'motion' },
-  game: { resolution: '1080', fps: 60, bitrate: 8000, optimization: 'motion' },
+  game: { resolution: '1080', fps: 60, bitrate: 16000, optimization: 'motion' },
   economy: { resolution: '720', fps: 15, bitrate: 1000, optimization: 'balanced' },
 };
 export function automaticBitrate(p: Pick<Preferences, 'resolution' | 'fps'>): Preferences['bitrate'] {
   if (p.resolution === '480') return p.fps >= 50 ? 2000 : 1000;
   if (p.resolution === '720') return p.fps >= 50 ? 5000 : p.fps >= 24 ? 3000 : 2000;
-  if (p.resolution === '1080') return p.fps >= 50 ? 8000 : p.fps >= 24 ? 5000 : 3000;
+  if (p.resolution === '1080') return p.fps >= 50 ? 16000 : p.fps >= 24 ? 5000 : 3000;
   return p.fps >= 50 ? 16000 : p.fps >= 24 ? 10000 : 5000;
 }
 export function effectiveBitrate(p: Preferences): Preferences['bitrate'] {
   return p.bitrateMode === 'auto' ? automaticBitrate(p) : p.bitrate;
 }
-// High-frame-rate balanced sharing should preserve motion instead of inheriting
-// the screen-sharing SDKs' detail-first default.
+// Frame rate must not silently replace the user's optimisation strategy.
 export function videoOptimization(p: Preferences): Preferences['optimization'] {
-  return p.optimization === 'balanced' && p.fps >= 50 ? 'motion' : p.optimization;
+  return p.optimization;
 }
 export function videoContentHint(p: Preferences): '' | 'motion' | 'detail' {
   const mode = videoOptimization(p);

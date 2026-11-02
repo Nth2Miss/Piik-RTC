@@ -35,11 +35,29 @@ export function rateFor(provider, pixels) {
 }
 
 export class QuotaMonitor {
-  constructor(store, sessions, usage, closeRoom, now = Date.now) {
+  constructor(store, sessions, usage, closeRoom, now = () => Date.now()) {
     this.store = store; this.sessions = sessions; this.usage = usage; this.closeRoom = closeRoom; this.now = now;
     this.last = now(); this.pending = undefined; this.lastSuccessfulCheck = 0;
   }
   healthy(at = this.now()) { return this.lastSuccessfulCheck > 0 && at - this.lastSuccessfulCheck <= 90000; }
+  touch(session, at = this.now()) {
+    if (session.lastSeen + PRESENCE_LIFETIME <= at) {
+      // Settle up to the previous presence deadline before reviving the session.
+      this.account(at);
+      session.mediaSince = at;
+    }
+    session.lastSeen = at;
+  }
+  updatePresence(session, payload, at = this.now()) {
+    const sharing = payload.sharing === true;
+    const media = payload.media && typeof payload.media === 'object' ? normalizeMedia(payload.media) : session.media;
+    const sharingChanged = sharing !== session.sharing;
+    if (sharingChanged || JSON.stringify(media) !== JSON.stringify(session.media)) this.account(at);
+    this.touch(session, at);
+    session.sharing = sharing;
+    session.media = media;
+    return sharingChanged;
+  }
   account(at = this.now()) {
     const from = this.last;
     if (at <= from) return;

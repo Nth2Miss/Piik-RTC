@@ -41,11 +41,12 @@ test('重复选择当前成员和音轨更新不重建健康的视频订阅', as
   await controller.select(1);
   assert.equal(log.at(-1), 'stop:a1');
 });
-test('均衡高帧率优先保帧，普通均衡不强制清晰策略，明确清晰选项保持不变', () => {
-  assert.equal(videoOptimization({...defaults,optimization:'balanced',fps:60}), 'motion');
-  assert.equal(videoContentHint({...defaults,optimization:'balanced',fps:60}), 'motion');
+test('均衡在高低帧率都保留用户选择，不强制改成流畅或清晰优先', () => {
+  assert.equal(videoOptimization({...defaults,optimization:'balanced',fps:60}), 'balanced');
+  assert.equal(videoContentHint({...defaults,optimization:'balanced',fps:60}), '');
   assert.equal(videoContentHint({...defaults,optimization:'balanced',fps:30}), '');
   assert.equal(videoOptimization({...defaults,optimization:'detail',fps:60}), 'detail');
+  assert.equal(videoOptimization({...defaults,optimization:'motion',fps:60}), 'motion');
 });
 test('编码尺寸按共享来源等比缩小，不拉伸窄窗口或放大小画面', () => {
   assert.deepEqual(encoderConfig(defaults, {width:3840,height:2160}), {width:1920,height:1080,frameRate:30,bitrateMax:5000});
@@ -56,11 +57,17 @@ test('编码尺寸按共享来源等比缩小，不拉伸窄窗口或放大小�
 test('自动码率随分辨率和帧率调整，手动上限保持可用', () => {
   assert.equal(defaults.bitrateMode, 'auto');
   assert.equal(automaticBitrate({...defaults,resolution:'720',fps:30}), 3000);
-  assert.equal(automaticBitrate({...defaults,resolution:'1080',fps:60}), 8000);
+  assert.equal(automaticBitrate({...defaults,resolution:'1080',fps:60}), 16000);
   assert.equal(automaticBitrate({...defaults,resolution:'1440',fps:60}), 16000);
-  assert.equal(effectiveBitrate({...defaults,resolution:'1080',fps:60,bitrate:1000}), 8000);
+  assert.equal(effectiveBitrate({...defaults,resolution:'1080',fps:60,bitrate:1000}), 16000);
   assert.equal(effectiveBitrate({...defaults,bitrateMode:'manual',bitrate:12000}), 12000);
   assert.equal(normalizePreferences({bitrateMode:'invalid'}).bitrateMode, 'auto');
+});
+
+test('旧桌面采集模式设置被丢弃，不再影响自动选择的路径', () => {
+  for (const desktopVideoMode of ['auto','canvas','generator']) {
+    assert.deepEqual(normalizePreferences({...defaults,desktopVideoMode}),defaults);
+  }
 });
 test('switching away from local preview never closes the published local track', async () => {
   const { log, controller } = setup();
@@ -123,7 +130,7 @@ test('invalid persisted settings are bounded; presets produce SDK capture config
   const config = captureConfig(game);
   assert.equal(config.encoderConfig.frameRate, 60);
   assert.equal(config.encoderConfig.width, 1920);
-  assert.equal(config.encoderConfig.bitrateMax, 8000);
+  assert.equal(config.encoderConfig.bitrateMax, 16000);
   assert.equal(config.optimizationMode, 'motion');
   assert.equal(config.selfBrowserSurface, 'exclude');
   assert.equal(captureConfig({ ...game, audio: false }).systemAudio, 'exclude');

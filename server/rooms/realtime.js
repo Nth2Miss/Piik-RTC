@@ -1,5 +1,4 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { normalizeMedia } from '../quota/monitor.js';
 import { clientIp, logEvent, providerLabel, roomLabel } from '../shared/log.js';
 
 const identityPattern = /^[\w-]{32}$/;
@@ -81,7 +80,6 @@ export function attachRealtime(server, app, env = process.env, limits = REALTIME
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
       if (message?.type === 'subscribe' && typeof message.roomId === 'string' && typeof message.sessionKey === 'string') {
-        app.locals.monitor.account();
         const session = sessions.get(message.sessionKey);
         if (!session || session.roomId !== message.roomId || session.userId !== identity || session.expiresAt <= Date.now()) {
           const reason = store.getAny(message.roomId)?.closeReason;
@@ -90,7 +88,7 @@ export function attachRealtime(server, app, env = process.env, limits = REALTIME
         }
         client.roomId = message.roomId;
         client.sessionKey = message.sessionKey;
-        session.lastSeen = Date.now();
+        app.locals.monitor.touch(session);
         store.occupied(client.roomId, Date.now());
         signatures.delete(client.roomId);
         sendRoom(client);
@@ -98,18 +96,13 @@ export function attachRealtime(server, app, env = process.env, limits = REALTIME
         return;
       }
       if (message?.type === 'presence' && client.roomId) {
-        app.locals.monitor.account();
         const session = sessions.get(client.sessionKey);
         if (!session || session.roomId !== client.roomId || session.userId !== identity || session.expiresAt <= Date.now()) return;
-        session.lastSeen = Date.now();
-        const sharing = message.sharing === true;
-        if (sharing !== session.sharing) {
+        if (app.locals.monitor.updatePresence(session, message)) {
           const room = store.get(client.roomId);
-          logEvent(sharing ? '开始共享' : '结束共享',
+          logEvent(session.sharing ? '开始共享' : '结束共享',
             { ip:client.ip, room:room ? roomLabel(room) : client.roomId, name:session.name, provider:providerLabel(room?.provider) });
         }
-        session.sharing = sharing;
-        if (message.media && typeof message.media === 'object') session.media = normalizeMedia(message.media);
         store.occupied(client.roomId, Date.now());
         broadcast(client.roomId);
       }
@@ -133,7 +126,7 @@ export function attachRealtime(server, app, env = process.env, limits = REALTIME
         client.roomId = undefined; client.sessionKey = undefined;
         continue;
       }
-      session.lastSeen = now;
+      app.locals.monitor.touch(session, now);
       store.occupied(client.roomId, now);
       if (app.locals.monitor.healthy(now)) send(client, { type:'quota-lease' });
     }

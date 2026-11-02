@@ -38,6 +38,8 @@ export function displayOptions(p: Preferences) {
   };
 }
 export interface CapturedScreen {
+  diagnostics?: () => CapturePipelineStats;
+  waitForOutput?: () => Promise<void>;
   tracks: LocalTrack[];
   surface: string;
   hasAudio: boolean;
@@ -45,6 +47,21 @@ export interface CapturedScreen {
   height: number;
   onEnded: (callback: () => void) => void;
   close: () => void;
+}
+export interface CapturePipelineStats {
+  path: 'generator' | 'canvas-raw' | 'canvas-jpeg';
+  width: number;
+  height: number;
+  targetFps: number;
+  received: number;
+  written: number;
+  dropped: number;
+  errors: number;
+  firstInputAt?: number;
+  firstOutputAt?: number;
+  lastInputAt?: number;
+  lastOutputAt?: number;
+  lastError?: string;
 }
 export function knownWindowAudioSupport(userAgent: string): boolean {
   // Older engines may ignore windowAudio and return system loopback for windows.

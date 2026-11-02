@@ -1,8 +1,22 @@
 import type { ILocalAudioTrack, ILocalVideoTrack, IRemoteAudioTrack, IRemoteVideoTrack, UID } from 'agora-rtc-sdk-ng';
 import type { Preferences } from '../preferences';
+import type { EncodingDiagnostics, StatisticsObservation } from './diagnostics';
+import type { StartupRecoverySnapshot } from './volc-startup';
 
 export type MediaKind = 'audio' | 'video';
+export interface VideoPlaybackState {
+  attached: boolean;
+  readyState?: number;
+  paused?: boolean;
+  frames?: number;
+  droppedFrames?: number;
+  playError?: 'blocked' | 'failed';
+  errorCode?: number;
+  trackState?: MediaStreamTrackState;
+  trackMuted?: boolean;
+}
 export interface BrowserVideoTrack {
+  getPlaybackState?(): VideoPlaybackState;
   play(container: HTMLElement, options?: { fit?: string; mirror?: boolean }): void;
   stop(): void;
 }
@@ -26,6 +40,7 @@ export type VideoTrack = LocalVideoTrack | IRemoteVideoTrack | BrowserVideoTrack
 export type AudioTrack = IRemoteAudioTrack | BrowserAudioTrack;
 export interface RtcRemoteUser {
   uid: UID;
+  publicationRevision?: number;
   hasAudio: boolean;
   hasVideo: boolean;
   videoTrack?: IRemoteVideoTrack | BrowserVideoTrack;
@@ -40,8 +55,8 @@ export interface ZegoPull {
   height: number;
 }
 export interface RtcStats {
-  RTT: number;
-  OutgoingAvailableBandwidth: number;
+  RTT?: number;
+  OutgoingAvailableBandwidth?: number;
   RecvBitrate: number;
   SendBitrate: number;
   Duration: number;
@@ -52,6 +67,9 @@ export interface NetworkQuality {
   downlinkNetworkQuality: number;
 }
 export interface LocalVideoStats {
+  startupRecovery?: StartupRecoverySnapshot;
+  diagnostics?: EncodingDiagnostics;
+  observation?: StatisticsObservation;
   sendResolutionWidth?: number;
   sendResolutionHeight?: number;
   captureResolutionWidth?: number;
@@ -65,10 +83,12 @@ export interface LocalVideoStats {
   encodeDelay?: number;
 }
 export interface RemoteVideoStats {
+  observation?: StatisticsObservation;
   receiveResolutionWidth?: number;
   receiveResolutionHeight?: number;
   receiveFrameRate?: number;
   decodeFrameRate?: number;
+  renderFrameRate?: number;
   codecType?: string;
   receiveBitrate?: number;
   packetLossRate?: number;
@@ -78,6 +98,7 @@ export interface RemoteVideoStats {
   end2EndDelay?: number;
 }
 export interface RtcEventMap {
+  'screen-publish-error': [message: string];
   'connection-state-change': [connection: string];
   'user-joined': [];
   'user-published': [user: RtcRemoteUser, kind: MediaKind];
@@ -95,15 +116,11 @@ export interface RtcEventSink {
 export interface RtcAdapter {
   readonly remoteUsers: RtcRemoteUser[];
   readonly zegoPulls?: ZegoPull[];
-  /** The provider's first screen publish after joining can initialize its
-   *  encoder on a low default profile; callers may verify and retry once. */
-  readonly firstShareNeedsRetry?: boolean;
   join(appId: string | number, room: string, token: string, uid: number): Promise<UID>;
   leave(): Promise<void>;
-  prepareScreen?(preferences: Preferences): Promise<void>;
   publish(tracks: LocalTrack[], preferences?: Preferences, size?: { width:number; height:number }): Promise<void>;
   unpublish(tracks: LocalTrack[]): Promise<void>;
-  subscribe(user: RtcRemoteUser, kind: MediaKind): Promise<void>;
+  subscribe(user: RtcRemoteUser, kind: MediaKind, signal?: AbortSignal): Promise<void>;
   unsubscribe(user: RtcRemoteUser): Promise<void>;
   renewToken(token: string): Promise<void>;
   getRTCStats(selected?: number): RtcStats;

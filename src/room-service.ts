@@ -1,15 +1,20 @@
 import type { UID } from 'agora-rtc-sdk-ng';
 import { getAgoraSdk } from './agora-sdk';
-import { browserCaptureTracks, captureScreen, type CapturedScreen } from './capture';
+import { browserCaptureTracks, captureScreen, type CapturedScreen, type CapturePipelineStats } from './capture';
 import { captureDesktopScreen } from './desktop/capture.ts';
 import { desktopAudioLabel, type CaptureSelection } from './desktop/bridge.ts';
-import { defaults, effectiveBitrate, encoderConfig, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
+import { defaults, effectiveBitrate, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
 import { usernameError } from './username';
 import type { Participant, Room, RtcProvider } from './types';
 import { RtcClient } from './rtc-client';
 import type { PlaybackSnapshot } from './playback-stats';
-import type { LocalTrack, LocalVideoTrack, MediaKind, RtcRemoteUser, VideoTrack } from './rtc/types';
+import { ShareDiagnostics, type ShareAttemptSnapshot } from './share-diagnostics.ts';
+import type { EncodingDiagnostics, StatisticsObservation } from './rtc/diagnostics';
+import type { StartupRecoverySnapshot } from './rtc/volc-startup';
+import { ViewerRecovery, type ViewerRecoveryRecord } from './rtc/viewer-recovery.ts';
+import { hasVideoOutput } from './rtc/browser.ts';
+import type { LocalTrack, LocalVideoTrack, MediaKind, RtcRemoteUser, VideoTrack, VideoPlaybackState } from './rtc/types';
 
 export interface RoomState {
   view: 'welcome' | 'lobby' | 'room';
@@ -35,32 +40,44 @@ export interface RoomState {
   providers: Record<RtcProvider, boolean>;
 }
 export interface ConnectionSnapshot {
+  viewerRecovery?: ViewerRecoveryRecord;
+  playbackElement?: VideoPlaybackState;
+  shareId?: string;
+  capturePipeline?: CapturePipelineStats;
   at: number;
   connected: boolean;
   connecting: boolean;
   connection: string;
   playback?: PlaybackSnapshot;
   room?: { id: string; isOwner: boolean; members: number };
-  network?: { rtt: number; uplinkKbps: number; recvBitrate: number; sendBitrate: number; quality: number };
+  network?: { rtt?: number; uplinkKbps?: number; recvBitrate: number; sendBitrate: number; quality: number };
   local?: {
+    startupRecovery?: StartupRecoverySnapshot;
+    diagnostics?: EncodingDiagnostics;
+    observation?: StatisticsObservation;
     width: number; height: number;
     captureFrameRate?: number; sendFrameRate?: number;
-    codec?: string; sendBitrate: number; targetBitrate: number;
-    rtt: number; encodeDelay?: number;
+    codec?: string; sendBitrate: number; targetBitrate?: number;
+    rtt?: number; encodeDelay?: number;
     hasAudio: boolean; surface: string;
   };
   remote?: {
+    observation?: StatisticsObservation;
     uid: number; name: string;
     width: number; height: number;
-    receiveFrameRate?: number; decodeFrameRate?: number;
+    receiveFrameRate?: number; decodeFrameRate?: number; renderFrameRate?: number;
     codec?: string; receiveBitrate: number;
     packetLossRate: number; currentPacketLossRate: number;
     receiveDelay: number; transportDelay: number; endToEndDelay: number;
   };
 }
 export interface DiagnosticsReport {
+  viewerRecovery: ViewerRecoveryRecord[];
+  schemaVersion: number;
+  shareAttempts: ShareAttemptSnapshot[];
+  capturePipeline?: CapturePipelineStats;
   capturedAt: string;
-  app: { name: string; sdk: string; secureContext: boolean };
+  app: { name: string; sdk: string; secureContext: boolean; mediaRevision: string };
   environment: Record<string, unknown>;
   room: { id: string; name: string; isOwner: boolean; closesAt: number | null } | null;
   session: {
@@ -87,10 +104,6 @@ export function errorText(error: unknown) {
   if (e.name === 'TimeoutError') return '请求超时，请检查网络或稍后重试。';
   return e.message || e.msg || '连接失败，请稍后重试。';
 }
-/** Volc's first screen publish can get stuck: either no frames leave the
- *  encoder at all, or it steps the resolution down while barely sending. */
-const firstShareDegraded = (width: number, fps: number, targetWidth: number) =>
-  !width || fps < 2 || (width < targetWidth * 0.9 && fps < 10);
 async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
   const response = await fetch(url, { method: method || (body === undefined ? 'GET' : 'POST'),
     headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
@@ -103,14 +116,16 @@ export const inviteUrl = (room: Room) => `${location.origin}/#room=${room.id}`;
 
 /** Agora owns transport. Piik components consume this store through React. */
 export function createRoomService() {
+  const client = new RtcClient();
   let preferences = { ...defaults }, name = '';
   try { preferences = normalizePreferences(JSON.parse(localStorage.getItem('screen-preferences') || '{}')); name = localStorage.getItem('screen-display-name') || ''; } catch { /* optional storage */ }
   let state: RoomState = { view:'welcome', name, configured:false, realtime:false, ready:false, busy:false, rooms:[], members:[], connected:false, connecting:false, sharing:false, connection:'准备就绪', caption:'选择成员可切换观看，你自己的共享会继续。', preferences, providers:{ agora:false, zego:false, volc:false, volc2:false } };
   const listeners = new Set<() => void>();
   const issues: { at:string; kind:string; message:string }[] = [];
   const mediaHistory: ConnectionSnapshot[] = [];
+  const shareDiagnostics = new ShareDiagnostics();
   let playback: PlaybackSnapshot | undefined, playbackAt = 0;
-  let shareRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastCapturePipeline: CapturePipelineStats | undefined;
   const redact = (value: string) => value
     .replace(/((?:token|sessionKey|inviteKey|appId|password|secret)\s*[=:]\s*)[^\s,;&"']+/gi, '$1[redacted]')
     .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[token]');
@@ -123,7 +138,6 @@ export function createRoomService() {
     const reason = event.reason as { message?: string } | undefined;
     recordIssue('unhandled-rejection', reason?.message || String(event.reason));
   });
-  const client = new RtcClient();
   let joined = false, confirmed = false, attempt = 0, revision = 0, listRevision = 0;
   let sessionKey: string | undefined;
   let participants: Participant[] = [];
@@ -144,6 +158,8 @@ export function createRoomService() {
   let presenceSignature = '';
   let quotaLeaseAt = 0;
   let quotaWatchdogBusy = false;
+  let viewerIntentRevision = 0;
+  let viewerExplicitlyCleared = false;
   function members(): Participant[] {
     if (!joined || state.uid === undefined) return [];
     const known = new Map(participants.map(person => [person.uid, person]));
@@ -151,7 +167,8 @@ export function createRoomService() {
     for (const uid of new Set([...known.keys(), ...client.remoteUsers.map(user => Number(user.uid))])) {
       if (uid === state.uid) continue;
       const remote = client.remoteUsers.find(user => user.uid === uid);
-      result.push({ uid, name:known.get(uid)?.name || `成员 ${uid}`, sharing:remote ? remote.hasVideo : known.get(uid)?.sharing || false, isOwner:known.get(uid)?.isOwner || false });
+      const volc = state.room?.provider === 'volc' || state.room?.provider === 'volc2';
+      result.push({ uid, name:known.get(uid)?.name || `成员 ${uid}`, sharing:remote ? remote.hasVideo || (volc && !!known.get(uid)?.sharing) : known.get(uid)?.sharing || false, isOwner:known.get(uid)?.isOwner || false });
     }
     return result;
   }
@@ -178,6 +195,10 @@ export function createRoomService() {
   }
   function connectionSnapshot(): ConnectionSnapshot {
     const snapshot: ConnectionSnapshot = {
+      viewerRecovery:viewerRecovery.export().at(-1),
+      playbackElement:nativePlaybackState(),
+      shareId:shareDiagnostics.shareId,
+      capturePipeline:capture?.diagnostics?.() ?? lastCapturePipeline,
       at:Date.now(), connected:state.connected, connecting:state.connecting, connection:state.connection,
       playback:Date.now() - playbackAt <= 5000 ? playback : undefined,
       room:state.room ? { id:state.room.id, isOwner:state.room.isOwner, members:state.members.length } : undefined,
@@ -187,7 +208,7 @@ export function createRoomService() {
     try {
       const rtc = client.getRTCStats(watched);
       const quality = client.getNetworkQuality(watched);
-      snapshot.network = { rtt:Math.round(rtc.RTT || 0), uplinkKbps:Math.round(rtc.OutgoingAvailableBandwidth || 0),
+      snapshot.network = { rtt:rtc.RTT === undefined ? undefined : Math.round(rtc.RTT), uplinkKbps:rtc.OutgoingAvailableBandwidth === undefined ? undefined : Math.round(rtc.OutgoingAvailableBandwidth),
         recvBitrate:Math.round(rtc.RecvBitrate || 0), sendBitrate:Math.round(rtc.SendBitrate || 0),
         quality:quality.uplinkNetworkQuality || quality.downlinkNetworkQuality };
     } catch { /* stats are unavailable until media connects */ }
@@ -195,12 +216,14 @@ export function createRoomService() {
       try {
         const stats = client.getLocalVideoStats();
         snapshot.local = {
+          startupRecovery:stats.startupRecovery,
+          diagnostics:stats.diagnostics, observation:stats.observation,
           width:Math.round(stats.sendResolutionWidth || stats.captureResolutionWidth || 0),
           height:Math.round(stats.sendResolutionHeight || stats.captureResolutionHeight || 0),
           captureFrameRate:stats.captureFrameRate, sendFrameRate:stats.sendFrameRate,
           codec:stats.codecType, sendBitrate:Math.round(stats.sendBitrate || 0),
-          targetBitrate:Math.round(stats.targetSendBitrate || 0),
-          rtt:Math.round(stats.sendRttMs || 0), encodeDelay:stats.encodeDelay,
+          targetBitrate:stats.targetSendBitrate === undefined ? undefined : Math.round(stats.targetSendBitrate),
+          rtt:stats.sendRttMs === undefined ? undefined : Math.round(stats.sendRttMs), encodeDelay:stats.encodeDelay,
           hasAudio:!!capture?.hasAudio, surface:capture?.surface || 'unknown',
         };
       } catch { /* not publishing video */ }
@@ -211,9 +234,10 @@ export function createRoomService() {
         if (stats) {
           const person = state.members.find(member => member.uid === state.selected);
           snapshot.remote = {
+            observation:stats.observation,
             uid:Number(state.selected), name:person?.name || `成员 ${state.selected}`,
             width:Math.round(stats.receiveResolutionWidth || 0), height:Math.round(stats.receiveResolutionHeight || 0),
-            receiveFrameRate:stats.receiveFrameRate, decodeFrameRate:stats.decodeFrameRate,
+            receiveFrameRate:stats.receiveFrameRate, decodeFrameRate:stats.decodeFrameRate, renderFrameRate:stats.renderFrameRate,
             codec:stats.codecType, receiveBitrate:Math.round(stats.receiveBitrate || 0),
             packetLossRate:stats.packetLossRate || 0, currentPacketLossRate:stats.currentPacketLossRate || 0,
             receiveDelay:Math.round(stats.receiveDelay || 0), transportDelay:Math.round(stats.transportDelay || 0),
@@ -230,8 +254,12 @@ export function createRoomService() {
     };
     const navigation = navigator as Navigator & { deviceMemory?: number };
     return {
+      schemaVersion:3,
+      viewerRecovery:viewerRecovery.export(),
+      shareAttempts:shareDiagnostics.export(),
       capturedAt:new Date().toISOString(),
-      app:{ name:'piik-rtc', sdk:!state.room ? '未连接' : state.room.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${getAgoraSdk().VERSION}`, secureContext:window.isSecureContext },
+      capturePipeline:capture?.diagnostics?.() ?? lastCapturePipeline,
+      app:{ name:'piik-rtc', mediaRevision:'2026-11-02-gentle-recovery-v6', sdk:!state.room ? '未连接' : state.room.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${getAgoraSdk().VERSION}`, secureContext:window.isSecureContext },
       environment:{
         userAgent:navigator.userAgent, platform:navigator.platform, language:navigator.language,
         languages:[...navigator.languages], hardwareConcurrency:navigator.hardwareConcurrency,
@@ -270,7 +298,40 @@ export function createRoomService() {
   const source = new SourceController({ client,
     remote:uid => client.remoteUsers.find(user => user.uid === uid),
     video:video => emit({ video }), empty:() => emit({ video:undefined }),
-    error:error => notify(`切换画面失败：${errorText(error)}`, true),
+    error:error => {
+      if (viewerRecovery.running) recordIssue('viewer-recovery-subscribe', errorText(error));
+      else notify(`切换画面失败：${errorText(error)}`, true);
+    },
+  });
+  function nativePlaybackState(): VideoPlaybackState | undefined {
+    const video = state.video;
+    return video && 'getPlaybackState' in video ? video.getPlaybackState?.() : undefined;
+  }
+  const viewerRecovery: ViewerRecovery = new ViewerRecovery({
+    read:() => {
+      const selected = source.selected;
+      const intended = selected ?? viewerRecovery.targetUid;
+      const expected = intended === undefined ? participants.find(person => person.sharing && person.uid !== state.uid)
+        : participants.find(person => person.uid === intended && person.sharing && person.uid !== state.uid);
+      const remote = expected ? client.remoteUsers.find(user => user.uid === expected.uid) : undefined;
+      const native = nativePlaybackState();
+      const frameReady = native ? hasVideoOutput(native) : !!state.video;
+      return {
+        scope:joined && state.room ? `${state.room.id}:${revision}` : undefined,
+        enabled:!viewerExplicitlyCleared && (state.room?.provider === 'volc' || state.room?.provider === 'volc2'),
+        connected:state.connected,connecting:state.connecting,busy:state.busy,sharing:tracks.length > 0,
+        visible:!document.hidden,paused:source.isPaused,leaseHealthy:quotaLeaseAt > 0 && Date.now() - quotaLeaseAt <= 60000,
+        intentRevision:viewerIntentRevision,targetUid:expected?.uid,published:!!remote?.hasVideo,
+        videoReady:!!remote?.hasVideo && !!remote.videoTrack && selected === expected?.uid && frameReady,
+        playbackBlocked:native?.playError === 'blocked',
+      };
+    },
+    disconnect:() => disconnectMedia(true), connect:() => connectMedia(false), select, resubscribe:uid => select(uid, true),
+    changed:record => {
+      recordIssue('viewer-recovery', JSON.stringify(record));
+      if (record.status === 'failed') notify('观看连接恢复失败，请重新进入房间。', true);
+      else emit();
+    },
   });
   source.setAudio(preferences.volume, preferences.muted);
   async function run(action: () => Promise<void>): Promise<boolean> {
@@ -280,7 +341,7 @@ export function createRoomService() {
     catch (error) { notify(errorText(error), true); return false; }
     finally { emit({ busy:false }); }
   }
-  async function select(uid?: UID) {
+  async function select(uid?: UID, refresh = false) {
     if (uid !== undefined && !state.connected) {
       const target = members().find(person => person.uid === uid);
       if (!target?.sharing) {
@@ -291,7 +352,7 @@ export function createRoomService() {
       catch (error) { notify(errorText(error), true); return; }
       if (!state.connected) return;
     }
-    const pending = source.select(uid); emit(); await pending; emit();
+    const pending = source.select(uid, refresh); emit(); await pending; emit();
   }
   function fallback() { void select(members().find(person => person.uid !== source.selected && person.sharing)?.uid); }
   async function token() {
@@ -313,16 +374,27 @@ export function createRoomService() {
     const sharer = next.find(person => person.sharing && person.uid !== state.uid);
     if (sharer) {
       cancelIdleDisconnect();
+      const volc = state.room?.provider === 'volc' || state.room?.provider === 'volc2';
+      if (viewerRecovery.running || viewerExplicitlyCleared || (volc && source.isPaused)) return;
       if (!state.connected && Date.now() > mediaRetryAt) {
-        void connectMedia().then(() => { if (state.connected) void select(sharer.uid); }).catch(() => { mediaRetryAt = Date.now() + 30000; });
+        const intent = viewerIntentRevision, roomRevision = revision;
+        void connectMedia(!volc).then(() => {
+          if (!state.connected) return;
+          if (volc && (intent !== viewerIntentRevision || roomRevision !== revision || viewerExplicitlyCleared || source.isPaused
+            || (source.selected !== undefined && source.selected !== sharer.uid))) return;
+          void select(sharer.uid);
+        }).catch(() => { mediaRetryAt = Date.now() + 30000; });
+      } else if (state.connected && source.selected === undefined && volc) {
+        const remote = client.remoteUsers.find(user => user.uid === sharer.uid && user.hasVideo);
+        if (remote) void select(remote.uid);
       }
     } else if (!tracks.length) {
       scheduleIdleDisconnect();
     }
   }
   function presencePayload() {
-    const dimensions = (track:any) => {
-      try { const settings = track?.getMediaStreamTrack?.().getSettings(); return { width:settings?.width || 0, height:settings?.height || 0 }; }
+    const dimensions = (track: VideoTrack | LocalTrack | undefined) => {
+      try { const settings = track && 'getMediaStreamTrack' in track ? track.getMediaStreamTrack().getSettings() : undefined; return { width:settings?.width || 0, height:settings?.height || 0 }; }
       catch { return { width:0, height:0 }; }
     };
     const receive = dimensions(state.video), publish = dimensions(tracks.find(track => track.trackMediaType === 'video'));
@@ -411,18 +483,18 @@ export function createRoomService() {
       void disconnectMedia();
     }, 60_000);
   }
-  async function disconnectMedia() {
+  async function disconnectMedia(strict = false) {
     if (!joined || !state.connected || tracks.length) return;
     mediaIdle = true;
     emit({ connected:false });
     mediaLeaving = (async () => {
       await source.select(undefined);
-      try { await client.leave(); } catch { /* already disconnected */ }
+      try { await client.leave(); } catch (error) { if (strict) throw error; }
       emit({ video:undefined, connection:'等待共享' });
     })();
     try { await mediaLeaving; } finally { mediaLeaving = undefined; }
   }
-  async function connectMedia() {
+  async function connectMedia(autoSelect = true) {
     if (!joined) return;
     if (mediaLeaving) await mediaLeaving;
     if (!joined || state.connected) return;
@@ -442,7 +514,7 @@ export function createRoomService() {
         cancelIdleDisconnect(); mediaRetryAt = 0;
         emit({ connected:true });
         const first = source.selected ?? client.remoteUsers.find(user => user.hasVideo)?.uid;
-        if (first !== undefined) void select(first);
+        if (autoSelect && first !== undefined) void select(first);
       } catch (error) {
         if (current !== attempt) return;
         await source.select(undefined); await client.leave().catch(() => {});
@@ -452,8 +524,11 @@ export function createRoomService() {
     try { await mediaConnecting; } finally { mediaConnecting = undefined; }
   }
   async function stop(switchSource = true) {
-    clearTimeout(shareRetryTimer);
-    shareRetryTimer = undefined;
+    if (shareDiagnostics.shareId) {
+      mediaHistory.push(connectionSnapshot());
+      if (mediaHistory.length > 120) mediaHistory.shift();
+      shareDiagnostics.finish(shareDiagnostics.shareId, 'stopped', capture?.diagnostics?.());
+    }
     const old = tracks; tracks = [];
     if (state.uid !== undefined) source.setLocal(state.uid);
     if (source.selected === state.uid) await source.select(switchSource ? members().find(person => person.uid !== state.uid && person.sharing)?.uid : undefined);
@@ -467,10 +542,12 @@ export function createRoomService() {
     if (switchSource) void heartbeat();
   }
   async function leave() {
+    viewerRecovery.cancel();
     closeSocket();
     attempt++; revision++; clearInterval(heartbeatTimer); heartbeatTimer = undefined;
     cancelIdleDisconnect(); mediaIdle = false; source.setPaused(false);
     const room = state.room, key = sessionKey;
+    if (mediaLeaving) await mediaLeaving.catch(() => {});
     await stop(false); await source.select(undefined);
     cancelIdleDisconnect();
     try { await client.leave(); }
@@ -484,6 +561,8 @@ export function createRoomService() {
   async function enter(room: Room) {
     if (!confirmed || (joined && state.room?.id === room.id)) return;
     if (joined) await leave();
+    viewerRecovery.reset();
+    viewerExplicitlyCleared = false;
     await client.setProvider(room.provider || 'agora');
     if ((room.provider || 'agora') === 'agora') getAgoraSdk().onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
     mediaHistory.length = 0; playback = undefined;
@@ -522,9 +601,8 @@ export function createRoomService() {
     const id = new URLSearchParams(location.hash.slice(1)).get('room');
     if (id && /^[a-f0-9]{12}$/.test(id)) await enter(await api<Room>(`/api/rooms/${id}`));
   }
-  async function share(selection?: CaptureSelection, retry = false) {
-    clearTimeout(shareRetryTimer);
-    shareRetryTimer = undefined;
+  async function share(selection?: CaptureSelection) {
+    lastCapturePipeline = undefined;
     if (!selection && (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia)) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
     const isZego = state.room?.provider === 'zego';
     // Zego caps screen sharing at 1080P and 10 Mbps. The desktop picker can
@@ -534,7 +612,10 @@ export function createRoomService() {
       ...state.preferences,
       ...(isZego && (state.preferences.resolution === '1440' || state.preferences.resolution === 'native') ? { resolution:'1080' as const } : {}),
       bitrate:(isZego ? Math.min(requestedBitrate, ZEGO_MAX_BITRATE) : requestedBitrate) as Preferences['bitrate'],
+      ...(isZego && requestedBitrate > ZEGO_MAX_BITRATE ? {bitrateMode:'manual' as const} : {}),
     };
+    const shareId = shareDiagnostics.begin(state.room!.id,state.room?.provider || 'agora',state.preferences,sharePreferences);
+    try {
     if (isZego && requestedBitrate > ZEGO_MAX_BITRATE) notify(`即构共享码率最高为 ${ZEGO_MAX_BITRATE / 1000} Mbps，已按该码率发送。`);
     // The browser picker must open while the click's activation is valid. The
     // desktop picker can connect and configure the screen encoder first, so the
@@ -542,20 +623,17 @@ export function createRoomService() {
     const captureTracks = (state.room?.provider || 'agora') === 'agora' ? getAgoraSdk() : browserCaptureTracks;
     let connectedBeforeCapture = false;
     if (selection && !state.connected) { await connectMedia(); connectedBeforeCapture = true; }
-    if (selection) {
-      try { await client.prepareScreen(sharePreferences); }
-      catch { /* publish applies the exact encoder config again */ }
-    }
     const next = await (async (): Promise<Awaited<ReturnType<typeof captureScreen>>> => {
       try {
         return selection
-          ? await captureDesktopScreen(selection, sharePreferences, captureTracks, message => notify(message, true))
+          ? await captureDesktopScreen(selection, sharePreferences, captureTracks, message => notify(message, true), {provider:state.room?.provider,onDiagnostics:stats => { lastCapturePipeline = stats; }})
           : await captureScreen(sharePreferences, captureTracks, undefined, undefined, isZego);
       } catch (error) {
         if (connectedBeforeCapture) await disconnectMedia();
         throw error;
       }
     })();
+    shareDiagnostics.captured(shareId,next);
     const video = next.tracks[0] as LocalVideoTrack;
     let ended = false;
     next.onEnded(() => { ended = true; if (tracks.includes(video)) void stop(); });
@@ -564,50 +642,51 @@ export function createRoomService() {
       if (ended || !joined || !state.connected) throw new Error('共享已停止，请重新选择。');
       cancelIdleDisconnect();
       await client.publish(next.tracks, sharePreferences, { width:next.width, height:next.height });
+      await next.waitForOutput?.();
       if (ended || !joined) { await client.unpublish(next.tracks).catch(() => {}); throw new Error('共享已停止，请重新选择。'); }
       tracks = next.tracks; capture = next; source.setLocal(state.uid!, video);
+      shareDiagnostics.published(shareId);
       await source.select(state.uid);
       const sourceAudio = next.surface === 'monitor' ? '系统' : next.surface === 'window' ? '窗口' : '标签页';
       const audioLabel = selection ? desktopAudioLabel(selection, next.hasAudio) : next.hasAudio ? `含${sourceAudio}音频` : '仅画面';
       const resolution = sharePreferences.resolution === 'native' ? '原画' : `${sharePreferences.resolution}p`;
       emit({ caption:`${resolution} · ${sharePreferences.fps} fps · ${audioLabel}，切换观看会保留你的共享。` });
       if (!selection && state.preferences.audio && !next.hasAudio) notify(`未获得${sourceAudio}音轨，本次仅共享画面。请在浏览器选择器中勾选共享音频。`);
-      if (!retry && selection && client.firstShareNeedsRetry) {
-        // The provider's first screen publish after joining can stay on its
-        // low resolution ladder. Re-running stop/share recreates the capture
-        // and MediaStreamTrackGenerator, which is the same path as the user's
-        // manual second share. Retry once, and only while both resolution and
-        // frame rate are clearly below the selected profile.
-        const targetWidth = Number(encoderConfig(sharePreferences, { width:next.width, height:next.height }).width) || 1920;
-        shareRetryTimer = setTimeout(() => {
-          shareRetryTimer = undefined;
-          void (async () => {
-            if (!tracks.includes(video) || !state.connected || !joined) return;
-            let stats: ReturnType<typeof client.getLocalVideoStats> | undefined;
-            try { stats = client.getLocalVideoStats(); } catch { return; }
-            const width = Number(stats?.sendResolutionWidth) || 0;
-            const fps = Number(stats?.sendFrameRate) || 0;
-            if (!firstShareDegraded(width, fps, targetWidth)) return;
-            await stop();
-            await share(selection, true);
-          })().catch(() => notify('首次共享自动恢复失败，请手动重新共享。', true));
-        }, 2500);
-      }
       void heartbeat();
-    } catch (error) { next.close(); throw error; }
+    } catch (error) {
+      lastCapturePipeline = next.diagnostics?.();
+      recordIssue('share-pipeline', lastCapturePipeline ? JSON.stringify(lastCapturePipeline) : errorText(error));
+      await client.unpublish(next.tracks).catch(() => {});
+      next.close();
+      if (connectedBeforeCapture) await disconnectMedia();
+      throw error;
+    }
+    } catch (error) {
+      shareDiagnostics.finish(shareId,'failed',lastCapturePipeline);
+      throw error;
+    }
   }
   client.on('connection-state-change', (connection:string) => {
     emit({ connection:({ CONNECTED:'媒体已连接', CONNECTING:'正在连接媒体…', RECONNECTING:'正在重连…', DISCONNECTING:'正在断开…', DISCONNECTED: mediaIdle ? '等待共享' : '媒体未连接' } as Record<string,string>)[connection], ...(connection === 'DISCONNECTED' ? { connected:false } : connection === 'CONNECTED' ? { connected:true } : {}) });
   });
   client.on('user-joined', () => { emit(); void heartbeat(); });
   client.on('billing-change', () => emit());
+  client.on('screen-publish-error', message => {
+    recordIssue('screen-startup-recovery', message);
+    void stop(); notify(message, true);
+  });
   client.on('user-published', (user:RtcRemoteUser, kind:MediaKind) => {
     if (kind !== 'video' && kind !== 'audio') return;
-    if (source.selected === user.uid || (kind === 'video' && source.selected === undefined)) void select(user.uid);
+    if (!viewerRecovery.running && !viewerExplicitlyCleared && (kind === 'video' || user.hasVideo) && (source.selected === user.uid || (kind === 'video' && source.selected === undefined))) void select(user.uid);
     emit(); void heartbeat();
   });
   client.on('user-unpublished', (user:RtcRemoteUser, kind:MediaKind) => {
-    if (source.selected === user.uid) { if (kind === 'video') fallback(); else void select(user.uid); }
+    if (source.selected === user.uid) {
+      if (kind === 'video') {
+        if (state.room?.provider === 'volc' || state.room?.provider === 'volc2') source.holdForRepublish(user.uid, fallback);
+        else fallback();
+      } else if (user.hasVideo) void select(user.uid);
+    }
     emit();
   });
   client.on('user-left', (user:RtcRemoteUser) => { if (source.selected === user.uid) fallback(); emit(); void heartbeat(); });
@@ -632,6 +711,7 @@ export function createRoomService() {
   client.on('token-privilege-did-expire', () => void renew());
   const listTimer = setInterval(() => { if (confirmed && !state.busy && !document.hidden) void refreshRooms().catch(() => {}); }, 30000);
   const statsTimer = setInterval(() => {
+    viewerRecovery.tick();
     if (!joined || !state.connected) return;
     mediaHistory.push(connectionSnapshot());
     if (mediaHistory.length > 120) mediaHistory.shift();
@@ -659,8 +739,10 @@ export function createRoomService() {
     if (!joined) return;
     if (document.hidden) { scheduleHeartbeat(); return; }
     openSocket(); void heartbeat(); scheduleHeartbeat();
+    if ((state.room?.provider === 'volc' || state.room?.provider === 'volc2') && !source.isPaused) reactToParticipants(participants);
   });
   window.addEventListener('pagehide', () => {
+    viewerRecovery.cancel();
     closeSocket();
     clearInterval(statsTimer);
     clearInterval(listTimer); clearInterval(mediaReport); clearInterval(quotaWatchdog); clearInterval(heartbeatTimer); clearTimeout(idleTimer); capture?.close();
@@ -711,8 +793,16 @@ export function createRoomService() {
     }),
     leave:() => run(async () => { await leave(); await refreshRooms(); }),
     changeName:() => run(async () => { if (joined) await leave(); confirmed = false; emit({ view:'welcome' }); }),
-    share:(selection?: CaptureSelection) => run(() => share(selection)), stop:() => run(() => stop()), select,
-    setPlaybackPaused: (paused: boolean) => source.setPaused(paused),
+    share:(selection?: CaptureSelection) => run(() => share(selection)), stop:() => run(() => stop()),
+    select:(uid?: UID) => {
+      viewerIntentRevision++; viewerRecovery.cancel();
+      viewerExplicitlyCleared = uid === undefined && (state.room?.provider === 'volc' || state.room?.provider === 'volc2');
+      return select(uid);
+    },
+    setPlaybackPaused: (paused: boolean) => {
+      source.setPaused(paused);
+      if (!paused && (state.room?.provider === 'volc' || state.room?.provider === 'volc2')) reactToParticipants(participants);
+    },
     savePreferences(value:Preferences) {
       const preferences = normalizePreferences(value);
       source.setAudio(preferences.volume, preferences.muted);

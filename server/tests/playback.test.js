@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlaybackSampler } from '../../src/playback-stats.ts';
+import { PlaybackSampler, formatFps } from '../../src/playback-stats.ts';
+
+test('帧率显示区分真实零帧率和不可用指标', () => {
+  assert.equal(formatFps(0), '0 fps'); assert.equal(formatFps(59.8), '60 fps');
+  for (const value of [undefined, NaN, Infinity, -1]) assert.equal(formatFps(value), '—');
+});
 
 test('播放统计用实际采样间隔计算，区分已播放帧和丢弃帧', () => {
   const sampler = new PlaybackSampler();

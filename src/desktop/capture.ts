@@ -1,14 +1,16 @@
-import type { CaptureTrackFactory, CapturedScreen } from '../capture.ts';
+import type { CaptureTrackFactory, CapturedScreen, CapturePipelineStats } from '../capture.ts';
 import { encoderConfig, videoOptimization, sourceContentHint, type Preferences } from '../preferences.ts';
 import type { LocalTrack } from '../rtc/types.ts';
 import { desktopBridge, type CaptureSelection, type DesktopBridge, type DesktopVideoFrame, type DesktopVideoStartResult } from './bridge.ts';
 import { startProcessAudio, type ProcessAudio } from './audio.ts';
+import { CaptureProgress } from './capture-progress.ts';
+import type { RtcProvider } from '../types';
 
 interface NativeVideo {
   track: MediaStreamTrack;
   width: number;
   height: number;
-  firstFrame: Promise<void>;
+  progress: CaptureProgress;
   onEnded: (handler: () => void) => void;
   stop: () => Promise<void>;
 }
@@ -48,7 +50,7 @@ function createCanvasVideoTrack(preferences: Preferences, width: number, height:
   return { canvas, context, track, requestFrame };
 }
 
-function relaxNativeTrack(track: MediaStreamTrack, width: number, height: number, fps: number) {
+function relaxNativeTrack(track: MediaStreamTrack) {
   // RTC SDKs apply width/height/frameRate constraints while configuring a
   // custom track. MediaStreamTrackGenerator rejects those constraints, which
   // surfaces as OverconstrainedError even though the host already produces
@@ -59,22 +61,18 @@ function relaxNativeTrack(track: MediaStreamTrack, width: number, height: number
       value: () => Promise.resolve(),
     });
   } catch { /* keep the native implementation */ }
-  try {
-    Object.defineProperty(track, 'getSettings', {
-      configurable: true,
-      value: () => ({ width, height, frameRate:fps }),
-    });
-  } catch { /* keep the native implementation */ }
 }
 
 /** The native host sends raw BGRA frames, with JPEG as the fallback. */
-async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelection, preferences: Preferences): Promise<NativeVideo> {
+export async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelection, preferences: Preferences, provider?: RtcProvider): Promise<NativeVideo> {
   const native = preferences.resolution === 'native';
   const target = encoderConfig(preferences);
+  const progress = new CaptureProgress({path:'canvas-jpeg',width:0,height:0,targetFps:preferences.fps,received:0,written:0,dropped:0,errors:0});
   let ended = false;
   let endedHandler: (() => void) | null = null;
   const offEnded = bridge.onVideoEnded(() => {
     ended = true;
+    progress.stop();
     endedHandler?.();
   });
 
@@ -101,10 +99,12 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
   const width = Number(started.width);
   const height = Number(started.height);
   const raw = started.mode === 'raw' && typeof VideoFrame === 'function';
+  progress.stats.width = width; progress.stats.height = height;
 
   let generator: MediaStreamTrackGenerator | undefined;
   let writer: WritableStreamDefaultWriter<VideoFrame> | undefined;
-  if (raw && typeof MediaStreamTrackGenerator === 'function') {
+  const useGenerator = provider !== 'volc' && provider !== 'volc2';
+  if (raw && useGenerator && typeof MediaStreamTrackGenerator === 'function') {
     try {
       generator = new MediaStreamTrackGenerator({ kind:'video' });
       writer = generator.writable.getWriter();
@@ -129,25 +129,20 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
       throw error;
     }
   }
-  relaxNativeTrack(track, width, height, preferences.fps);
+  if (generator) relaxNativeTrack(track);
+  progress.stats.path = generator ? 'generator' : raw ? 'canvas-raw' : 'canvas-jpeg';
 
   let stopped = false;
   let frameSink: ((frame: DesktopVideoFrame) => void) | null = null;
   let pendingFrame: DesktopVideoFrame | null = null;
   let writingRaw = false;
   let latestRaw: VideoFrame | null = null;
-  let firstFrameDone = false;
-  let resolveFirstFrame: () => void = () => {};
-  const firstFrame = new Promise<void>(resolve => { resolveFirstFrame = resolve; });
-  const settleFirstFrame = () => {
-    if (firstFrameDone) return;
-    firstFrameDone = true;
-    resolveFirstFrame();
-  };
 
   // Keep only the newest frame while the previous one is being consumed.
   const queueRaw = (frame: VideoFrame, consume: (frame: VideoFrame) => void | Promise<void>) => {
     if (stopped) { frame.close(); return; }
+    progress.received();
+    if (latestRaw) progress.stats.dropped++;
     latestRaw?.close();
     latestRaw = frame;
     if (writingRaw) return;
@@ -156,8 +151,8 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
       while (latestRaw && !stopped) {
         const next = latestRaw;
         latestRaw = null;
-        try { await consume(next); } catch { /* a bad frame must not stop the share */ }
-        finally { next.close(); settleFirstFrame(); }
+        try { await consume(next); progress.written(); } catch (error) { progress.failed(error); }
+        finally { next.close(); }
       }
       writingRaw = false;
     })();
@@ -185,6 +180,7 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
 
   const offRaw = raw ? bridge.onVideoFrameRaw(({ frame }) => pushRaw(frame)) : undefined;
   const offFrame = raw ? undefined : bridge.onVideoFrame(frame => {
+    progress.received();
     if (frameSink) frameSink(frame);
     else if (!pendingFrame) pendingFrame = frame;
   });
@@ -200,11 +196,11 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
       if (!stopped && context) {
         context.drawImage(bitmap, 0, 0, width, height);
         requestFrame();
-        settleFirstFrame();
+        progress.written();
       }
       bitmap.close();
-    } catch {
-      /* a damaged frame must not stop the share */
+    } catch (error) {
+      progress.failed(error);
     }
     decoding = false;
     if (latest) {
@@ -217,6 +213,7 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
   const stop = async () => {
     if (stopped) return;
     stopped = true;
+    progress.stop();
     offRaw?.();
     offFrame?.();
     offEnded();
@@ -225,10 +222,10 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
     latestRaw = null;
     frameSink = null;
     pendingFrame = null;
-    try { await bridge.stopVideo(); } catch { /* host may already be stopped */ }
     try { track.stop(); } catch { /* already stopped */ }
-    void writer?.close().catch(() => { /* already closed */ });
+    void writer?.abort().catch(() => { /* already closed */ });
     canvas?.remove();
+    try { await bridge.stopVideo(); } catch { /* host may already be stopped */ }
   };
 
   if (!raw) {
@@ -244,7 +241,7 @@ async function startNativeVideo(bridge: DesktopBridge, selection: CaptureSelecti
     track,
     width,
     height,
-    firstFrame,
+    progress,
     onEnded: handler => {
       endedHandler = handler;
       if (ended) handler();
@@ -295,8 +292,9 @@ export async function captureDesktopScreen(
   preferences: Preferences,
   sdk: CaptureTrackFactory,
   onWarning: (message: string) => void,
+  options: { provider?: RtcProvider; bridge?: DesktopBridge; onDiagnostics?: (stats: CapturePipelineStats) => void } = {},
 ): Promise<CapturedScreen> {
-  const bridge = desktopBridge;
+  const bridge = options.bridge ?? desktopBridge;
   if (!bridge) throw new Error('桌面采集组件不可用。');
 
   const tracks: LocalTrack[] = [];
@@ -305,12 +303,11 @@ export async function captureDesktopScreen(
   let closed = false;
 
   try {
-    video = await startNativeVideo(bridge, selection, preferences);
-    // Let the first captured frame reach the generator/canvas before the RTC
-    // SDK creates its encoder. On the first publish after joining, starting
-    // with an empty track can leave Volc at its low default profile until the
-    // user shares again.
-    await Promise.race([video.firstFrame, new Promise<void>(resolve => setTimeout(resolve, 1500))]);
+    video = await startNativeVideo(bridge, selection, preferences, options.provider);
+    // Generator writes may be backpressured until RTC consumes the track.
+    // Wait only for input here, then verify output after publishing.
+    await video.progress.wait('received');
+    if (video.progress.stats.path !== 'generator') await video.progress.wait('written');
     video.track.contentHint = sourceContentHint(preferences);
     const config = encoderConfig(preferences, { width: video.width, height: video.height });
     const videoTrack = sdk.createCustomVideoTrack({
@@ -345,11 +342,14 @@ export async function captureDesktopScreen(
       hasAudio: tracks.length > 1,
       width: video.width,
       height: video.height,
+      diagnostics:() => ({...video!.progress.stats}),
+      waitForOutput:() => video!.progress.wait('written'),
       onEnded: handler => { endedCallback = handler; if (videoEnded) handler(); },
       close,
     };
   } catch (error) {
     closed = true;
+    if (video) options.onDiagnostics?.({...video.progress.stats});
     void video?.stop();
     void audio?.stop();
     for (const track of tracks) {

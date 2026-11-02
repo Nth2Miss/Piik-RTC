@@ -82,16 +82,26 @@ export class RoomStore {
   }
   addUsageBatch(entries) {
     if (!entries.length) return;
-    const quota = this.db.prepare('INSERT INTO rtc_quota(provider,month,estimated) VALUES (?,?,?) ON CONFLICT(provider,month) DO UPDATE SET estimated=estimated+excluded.estimated');
-    const room = this.db.prepare('INSERT INTO rtc_room_usage VALUES (?,?,?,?) ON CONFLICT(provider,month,roomId) DO UPDATE SET estimated=estimated+excluded.estimated');
-    const zego = this.db.prepare('INSERT INTO zego_tier_duration VALUES (?,?,?) ON CONFLICT(month,rate) DO UPDATE SET milliseconds=milliseconds+excluded.milliseconds');
+    const quotas = new Map(), rooms = new Map(), tiers = new Map();
+    const sum = (map, key, amount) => {
+      const id = JSON.stringify(key), entry = map.get(id);
+      if (entry) entry.amount += amount; else map.set(id, { key, amount });
+    };
+    for (const entry of entries) {
+      sum(quotas, [entry.provider, entry.month], entry.amount);
+      sum(rooms, [entry.provider, entry.month, entry.roomId], entry.amount);
+      if (entry.zegoRate !== undefined) sum(tiers, [entry.month, entry.zegoRate], entry.milliseconds);
+    }
+    const { quota, room, zego } = this.usageStatements ??= {
+      quota:this.db.prepare('INSERT INTO rtc_quota(provider,month,estimated) VALUES (?,?,?) ON CONFLICT(provider,month) DO UPDATE SET estimated=estimated+excluded.estimated'),
+      room:this.db.prepare('INSERT INTO rtc_room_usage VALUES (?,?,?,?) ON CONFLICT(provider,month,roomId) DO UPDATE SET estimated=estimated+excluded.estimated'),
+      zego:this.db.prepare('INSERT INTO zego_tier_duration VALUES (?,?,?) ON CONFLICT(month,rate) DO UPDATE SET milliseconds=milliseconds+excluded.milliseconds'),
+    };
     this.db.exec('BEGIN');
     try {
-      for (const entry of entries) {
-        if (entry.zegoRate !== undefined) zego.run(entry.month, entry.zegoRate, entry.milliseconds);
-        quota.run(entry.provider, entry.month, entry.amount);
-        room.run(entry.provider, entry.month, entry.roomId, entry.amount);
-      }
+      for (const { key, amount } of quotas.values()) quota.run(...key, amount);
+      for (const { key, amount } of rooms.values()) room.run(...key, amount);
+      for (const { key, amount } of tiers.values()) zego.run(...key, amount);
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }

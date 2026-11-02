@@ -106,6 +106,77 @@ test('批量用量写入共用一个事务，失败时整批回滚', t => {
   assert.equal(store.db.prepare('SELECT estimated FROM rtc_room_usage WHERE provider=? AND roomId=?').get('volc','rollback'), undefined);
 });
 
+test('同批 200 路用量按服务商、月份、房间和即构档位合并，只写各个汇总行', t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  const writes = [], prepare = store.db.prepare.bind(store.db);
+  store.db.prepare = sql => {
+    const statement = prepare(sql);
+    if (sql.startsWith('INSERT INTO')) {
+      const run = statement.run.bind(statement);
+      statement.run = (...args) => { writes.push(sql); return run(...args); };
+    }
+    return statement;
+  };
+  const entries = Array.from({length:200}, (_, index) => ({provider:'zego',month:'2026-10',roomId:index % 2 ? 'a' : 'b',amount:7,zegoRate:14,milliseconds:30000}));
+  store.addUsageBatch(entries);
+  assert.equal(writes.length, 4); // one provider total, two rooms, one tier
+  assert.equal(store.quota('zego','2026-10').estimated, 1400);
+  assert.equal(store.db.prepare('SELECT milliseconds FROM zego_tier_duration').get().milliseconds, 6_000_000);
+  assert.deepEqual(store.db.prepare('SELECT estimated FROM rtc_room_usage ORDER BY roomId').all().map(row => row.estimated), [700,700]);
+  store.addUsageBatch([{provider:'volc',month:'2026-10',roomId:'a',amount:1},{provider:'volc2',month:'2026-10',roomId:'a',amount:2},{provider:'volc',month:'2026-11',roomId:'a',amount:3}]);
+  assert.equal(store.quota('volc','2026-10').estimated, 1);
+  assert.equal(store.quota('volc2','2026-10').estimated, 2);
+  assert.equal(store.quota('volc','2026-11').estimated, 3);
+});
+
+test('重复心跳不结算，切换画质前按旧档位结算，停止后不再计费', t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  let now = Date.parse('2026-10-20T00:00:00Z'); room(store,'a','zego',now);
+  const payload = {sharing:false,media:{connected:true,pulls:[{uid:7,kind:'video',width:1280,height:720}]}};
+  const viewer = {...session('a',1,now,normalizeMedia(payload.media)),sharing:false};
+  const monitor = new QuotaMonitor(store,new Map([['a',viewer]]),empty,() => {},() => now);
+  let batches = 0;
+  const write = store.addUsageBatch.bind(store); store.addUsageBatch = entries => { if (entries.length) batches++; write(entries); };
+  for (let i = 0; i < 100; i++) { now += 100; monitor.updatePresence(viewer,payload); }
+  assert.equal(batches, 0);
+  now += 20_000; monitor.account();
+  assert.equal(batches, 1); assert.equal(store.quota('zego','2026-10').estimated, 1.8);
+  now += 10_000; monitor.updatePresence(viewer,{sharing:false,media:{connected:true,pulls:[{uid:7,kind:'video',width:1920,height:1080}]}});
+  assert.ok(Math.abs(store.quota('zego','2026-10').estimated - 2.4) < 1e-9);
+  now += 30_000; monitor.updatePresence(viewer,{sharing:false,media:{connected:false,pulls:[]}});
+  const total = store.quota('zego','2026-10').estimated;
+  assert.ok(Math.abs(total - 9.4) < 1e-9);
+  now += 20_000; monitor.account(); assert.equal(store.quota('zego','2026-10').estimated, total);
+});
+
+test('心跳恢复不补收离线间隔，跨月仍按北京时间分段', t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  let now = Date.parse('2026-10-31T15:59:30Z'); room(store,'a','volc',now);
+  const viewer = {...session('a',1,now,normalizeMedia({connected:true})),sharing:false};
+  const monitor = new QuotaMonitor(store,new Map([['a',viewer]]),empty,() => {},() => now);
+  now += 60_000; monitor.updatePresence(viewer,{sharing:false,media:{connected:true}});
+  assert.equal(store.quota('volc','2026-10').estimated, 0.5);
+  assert.equal(store.quota('volc','2026-11').estimated, 0.25);
+  now += 30_000; monitor.account();
+  assert.equal(store.quota('volc','2026-11').estimated, 0.75);
+});
+
+test('合并写入失败保留计费时间和媒体状态，下次可完整重试', t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  let now = Date.parse('2026-10-20T00:00:00Z'); room(store,'a','volc',now);
+  const viewer = {...session('a',1,now,normalizeMedia({connected:true})),sharing:false};
+  const monitor = new QuotaMonitor(store,new Map([['a',viewer]]),empty,() => {},() => now);
+  const start = now, write = store.addUsageBatch.bind(store);
+  store.addUsageBatch = () => { throw new Error('write failed'); };
+  now += 30_000;
+  assert.throws(() => monitor.updatePresence(viewer,{sharing:false,media:{connected:false}}), /write failed/);
+  assert.equal(monitor.last, start); assert.equal(viewer.media.connected, true);
+  store.addUsageBatch = write;
+  monitor.updatePresence(viewer,{sharing:false,media:{connected:false}});
+  assert.equal(store.quota('volc','2026-10').estimated, 0.5);
+  assert.equal(viewer.media.connected, false);
+});
+
 test('余额达到 500 分钟保护线时关闭该服务商所有房间', async t => {
   const store = new RoomStore(); t.after(() => store.close());
   const now = Date.parse('2026-10-20T00:00:00Z'); room(store, 'one', 'volc', now); room(store, 'two', 'volc', now); room(store, 'other', 'zego', now);
@@ -116,6 +187,19 @@ test('余额达到 500 分钟保护线时关闭该服务商所有房间', async 
   store.addUsage('volc', '2026-10', 'two', 0.01);
   await monitor.check(); assert.deepEqual(closed.map(x => x[0]).sort(), ['one','two']);
   assert.match(closed[0][1], /500 分钟保护线/); assert.ok(store.get('other'));
+});
+
+test('额度检查即时结算重复心跳期间的用量，达到 500 分钟仍关闭房间', async t => {
+  const store = new RoomStore(); t.after(() => store.close());
+  let now = Date.parse('2026-10-20T00:00:00Z'); room(store,'a','volc2',now);
+  store.addUsage('volc2','2026-10','a',9499.5);
+  const viewer = {...session('a',1,now,normalizeMedia({connected:true})),sharing:false};
+  const closed = [];
+  const monitor = new QuotaMonitor(store,new Map([['a',viewer]]),empty,room => closed.push(room.id),() => now);
+  for (let i = 0; i < 30; i++) { now += 1000; monitor.updatePresence(viewer,{sharing:false,media:{connected:true}}); }
+  assert.equal(store.quota('volc2','2026-10').estimated, 9499.5);
+  assert.equal((await monitor.check()).volc2.remaining, 500);
+  assert.deepEqual(closed, ['a']);
 });
 
 test('监控成功后提供短期存活确认，超时后停止确认', async t => {
