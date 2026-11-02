@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using PiikDesktop;
+using PiikRTC;
 
 var path = Path.Combine(Path.GetTempPath(), "piik-update-test-" + Guid.NewGuid().ToString("N"));
 try

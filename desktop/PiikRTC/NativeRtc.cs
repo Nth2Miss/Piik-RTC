@@ -7,7 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal sealed class NativeRtc
     {

@@ -6,7 +6,7 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal static class Program
     {
@@ -20,7 +20,7 @@ namespace PiikDesktop
             Application.ThreadException += (_, eventArgs) => Fatal(eventArgs.Exception);
             AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) => Fatal(eventArgs.ExceptionObject as Exception);
 
-            using (var mutex = new Mutex(true, "PiikDesktop.SingleInstance", out var created))
+            using (var mutex = new Mutex(true, "PiikRTC.SingleInstance", out var created))
             {
                 if (!created) return;
                 try
@@ -52,7 +52,7 @@ namespace PiikDesktop
 
         private static void ExtractAudioHelper()
         {
-            var folder = Path.Combine(Path.GetTempPath(), "PiikDesktop", "audio");
+            var folder = Path.Combine(Path.GetTempPath(), "PiikRTC", "audio");
             Directory.CreateDirectory(folder);
             var target = Path.Combine(folder, "PiikAudio.exe");
             using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Piik.Audio.gz"))
@@ -79,7 +79,7 @@ namespace PiikDesktop
 
         private static void ExtractWebView2Loader()
         {
-            var folder = Path.Combine(Path.GetTempPath(), "PiikDesktop", "WebView2Loader");
+            var folder = Path.Combine(Path.GetTempPath(), "PiikRTC", "WebView2Loader");
             Directory.CreateDirectory(folder);
             var target = Path.Combine(folder, "WebView2Loader.dll");
             using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Piik.WebView2Loader.dll"))

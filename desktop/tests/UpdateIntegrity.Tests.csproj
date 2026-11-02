@@ -4,6 +4,6 @@
     <TargetFramework>net9.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../PiikDesktop/UpdateIntegrity.cs" Link="UpdateIntegrity.cs" />
+    <Compile Include="../PiikRTC/UpdateIntegrity.cs" Link="UpdateIntegrity.cs" />
   </ItemGroup>
 </Project>

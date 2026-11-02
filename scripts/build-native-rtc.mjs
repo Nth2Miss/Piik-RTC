@@ -31,7 +31,7 @@ const q = text => `"${text}"`;
 writeFileSync(batch,`@echo off\r\ncall ${q(vcvars)} >nul\r\nif errorlevel 1 exit /b 1\r\ncl /nologo /std:c++17 /EHsc /MT /LD /utf-8 /I ${q(path.join(sdk,'include'))} ${q(path.join(root,'desktop','native','PiikVolc','PiikVolc.cpp'))} /Fo:${q(path.join(output,'PiikVolc.obj'))} /link /OUT:${q(path.join(output,'PiikVolc.dll'))} /IMPLIB:${q(path.join(output,'PiikVolc.lib'))} /LIBPATH:${q(path.join(sdk,'lib','x64'))} VolcEngineRTC.lib user32.lib\r\nexit /b %errorlevel%\r\n`);
 run('cmd.exe',['/d','/c',batch]);
 // Keep the runtime beside each development/release host; vendor binaries stay ignored.
-const destinations = [path.join(root,'desktop','PiikDesktop','bin','Release','net48','native-volc'),path.join(root,'release','native-volc')];
+const destinations = [path.join(root,'desktop','PiikRTC','bin','Release','net48','native-volc'),path.join(root,'release','native-volc')];
 const runtime = path.join(sdk,'bin','x64');
 // Official modular package: only the Windows libraries required for screen
 // sharing, audio and H.264 are shipped. effect/beauty and optional codec

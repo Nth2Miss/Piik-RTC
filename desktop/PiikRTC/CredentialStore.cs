@@ -4,11 +4,12 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     /// <summary>Remembers HTTP auth credentials per server origin, encrypted with the current Windows account.</summary>
     internal static class CredentialStore
     {
+        // Keep the legacy entropy string: changing it makes saved credentials unreadable.
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("PiikDesktop.Auth.v1");
         private static readonly object Gate = new object();
 

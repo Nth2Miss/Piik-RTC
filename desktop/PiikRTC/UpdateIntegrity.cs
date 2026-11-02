@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal static class UpdateIntegrity
     {

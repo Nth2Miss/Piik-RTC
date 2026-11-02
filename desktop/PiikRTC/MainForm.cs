@@ -10,7 +10,7 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal sealed class MainForm : Form, IBridgeHost
     {
@@ -287,7 +287,7 @@ namespace PiikDesktop
         {
             try
             {
-                var userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PiikDesktop", "WebView2");
+                var userData = Path.Combine(AppConfig.DataDirectory, "WebView2");
                 Directory.CreateDirectory(userData);
                 var options = new CoreWebView2EnvironmentOptions(_browserArguments);
                 var environment = await CoreWebView2Environment.CreateAsync(null, userData, options);
@@ -369,7 +369,7 @@ namespace PiikDesktop
 
         private static void SetupVirtualHost(CoreWebView2 core)
         {
-            var folder = Path.Combine(Path.GetTempPath(), "PiikDesktop", "setup");
+            var folder = Path.Combine(Path.GetTempPath(), "PiikRTC", "setup");
             Directory.CreateDirectory(folder);
             var setup = ResourceText("Piik.Setup.html");
             if (!string.IsNullOrEmpty(setup)) File.WriteAllText(Path.Combine(folder, "setup.html"), setup, new UTF8Encoding(true));

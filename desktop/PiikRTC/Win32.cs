@@ -2,7 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal static class Win32
     {

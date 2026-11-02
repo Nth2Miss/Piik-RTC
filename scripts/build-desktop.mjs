@@ -8,9 +8,9 @@ const packageVersion = JSON.parse(readFileSync(path.join(root, 'package.json'), 
 const helperProject = path.join(root, 'desktop', 'native', 'PiikAudio', 'PiikAudio.csproj');
 const helperOutput = path.join(root, 'desktop', 'bin');
 const helperExe = path.join(helperOutput, 'PiikAudio.exe');
-const hostProject = path.join(root, 'desktop', 'PiikDesktop', 'PiikDesktop.csproj');
-const hostExe = path.join(root, 'desktop', 'PiikDesktop', 'bin', 'Release', 'net48', 'Piik.exe');
-const resource = path.join(root, 'desktop', 'PiikDesktop', 'Resources', 'PiikAudio.exe.gz');
+const hostProject = path.join(root, 'desktop', 'PiikRTC', 'PiikRTC.csproj');
+const hostExe = path.join(root, 'desktop', 'PiikRTC', 'bin', 'Release', 'net48', 'Piik.exe');
+const resource = path.join(root, 'desktop', 'PiikRTC', 'Resources', 'PiikAudio.exe.gz');
 const release = path.join(root, 'release');
 
 function run(command, args) {

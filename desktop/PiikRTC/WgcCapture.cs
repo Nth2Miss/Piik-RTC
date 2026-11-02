@@ -18,7 +18,7 @@ using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
 using Windows.Graphics.Imaging;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal sealed class RawVideoFrame
     {

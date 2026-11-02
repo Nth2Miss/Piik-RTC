@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     /// <summary>Small JSON helper so the single-file host needs no extra dependency.</summary>
     internal static class SimpleJson

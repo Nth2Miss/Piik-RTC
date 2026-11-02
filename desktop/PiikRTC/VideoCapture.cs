@@ -7,7 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal sealed class VideoFrameData
     {

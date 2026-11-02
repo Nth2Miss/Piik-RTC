@@ -6,7 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal sealed class AppConfig
     {
@@ -17,18 +17,18 @@ namespace PiikDesktop
         public int X = int.MinValue;
         public int Y = int.MinValue;
 
-        private static string ConfigDirectory
+        public static string DataDirectory
         {
             get
             {
-                var local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PiikDesktop");
+                var local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PiikRTC");
                 try { Directory.CreateDirectory(local); return local; } catch { return Path.GetTempPath(); }
             }
         }
 
         public static string ConfigPath
         {
-            get { return Path.Combine(ConfigDirectory, "config.json"); }
+            get { return Path.Combine(DataDirectory, "config.json"); }
         }
 
         public static AppConfig Load(string[] args)

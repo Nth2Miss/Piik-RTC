@@ -17,7 +17,8 @@
    - 本机调试可以使用 `http://localhost:3000`。
    - 如果服务器通过 Nginx 等反向代理启用了 HTTP 认证（如 `auth_basic`），连接后会在应用窗口内显示登录页（与设置页同一套界面），输入代理配置的用户名和密码即可；勾选“记住密码”后会用当前 Windows 账户加密保存，重开程序无需再次输入。服务器地址里不用写 `user:pass@`，写了也会被忽略。
    - 如果构建时内嵌了服务端地址，首次启动会直接连接，不再显示这一步。
-3. 地址保存在 `%LOCALAPPDATA%\PiikDesktop\config.json`；在窗口内右键打开菜单，选择“服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。优先级：启动参数 > 环境变量 > 已保存配置 > 构建时内嵌地址。
+3. 地址保存在 `%LOCALAPPDATA%\PiikRTC\config.json`；在窗口内右键打开菜单，选择“服务器设置…”可以修改，也支持启动参数 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。优先级：启动参数 > 环境变量 > 已保存配置 > 构建时内嵌地址。
+4. 本版本起使用 `%LOCALAPPDATA%\PiikRTC`；旧版本留下的 `%LOCALAPPDATA%\PiikDesktop` 不会自动迁移，升级后需要重新填写服务器地址并登录。
 
 桌面端加载服务器上的网页前端，所以服务端更新后界面也会更新；只有桌面壳或原生采集改动才需要重新发布客户端。
 
@@ -131,11 +132,11 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 构建流程：
 
 1. `dotnet publish` 把 `desktop/native/PiikAudio` 发布成裁剪、自包含的 12.8 MB 单文件。
-2. 用 gzip 压缩到约 5.8 MB，写入 `desktop/PiikDesktop/Resources/PiikAudio.exe.gz`。
+2. 用 gzip 压缩到约 5.8 MB，写入 `desktop/PiikRTC/Resources/PiikAudio.exe.gz`。
 3. `dotnet build` 构建 C# 主机；Costura 把 WebView2 托管 DLL 嵌入 exe，音频组件作为资源嵌入。
 4. 输出 `release/Piik-RTC-v<版本>.exe`（约 6.4 MB）和 `release/version.json`。
 
-首次运行会把音频组件释放到 `%TEMP%\PiikDesktop\audio\PiikAudio.exe`；WebView2 用户数据在 `%LOCALAPPDATA%\PiikDesktop\WebView2`。
+首次运行会把音频组件释放到 `%TEMP%\PiikRTC\audio\PiikAudio.exe`；WebView2 用户数据在 `%LOCALAPPDATA%\PiikRTC\WebView2`。
 
 ## 体积
 
@@ -167,7 +168,7 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 
 - WebView2 只允许导航到配置的服务器来源；外部链接交给系统浏览器打开。
 - 原生 IPC 会校验消息来源；只有本地设置页可以修改服务器地址。
-- 反向代理的 HTTP 认证密码通过 Windows DPAPI 按当前用户加密后保存在 `%LOCALAPPDATA%\PiikDesktop\credentials.json`，其他 Windows 账户无法解密。
+- 反向代理的 HTTP 认证密码通过 Windows DPAPI 按当前用户加密后保存在 `%LOCALAPPDATA%\PiikRTC\credentials.json`，其他 Windows 账户无法解密。
 - 共享来源由用户在原生选择器中明确选择；关闭选择器会清空待共享来源。
 - 音频组件只读取系统/进程音频，不采集麦克风或摄像头。
 - 程序未签名，首次运行可能出现 SmartScreen 提示。

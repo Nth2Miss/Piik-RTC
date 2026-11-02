@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Core;
 
-namespace PiikDesktop
+namespace PiikRTC
 {
     internal interface IBridgeHost
     {

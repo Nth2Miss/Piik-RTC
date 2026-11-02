@@ -81,7 +81,7 @@ npm run desktop:build -- --server=https://piik.example.com   # 内嵌默认服�
 | `src/` | 页面、播放器、房间与媒体状态管理 |
 | `src/desktop/` | 桌面端桥接、选择器、PCM 音频管线 |
 | `src/vendor/piik/` | 原样保留的 Piik 组件与资源 |
-| `desktop/PiikDesktop/` | C# WebView2 单文件主机、原生采集与 IPC |
+| `desktop/PiikRTC/` | C# WebView2 单文件主机、原生采集与 IPC |
 | `desktop/native/PiikAudio/` | C# WASAPI 系统/进程回环采集组件 |
 | `server/` | API、Token 签发、实时同步与房间存储 |
 | `scripts/build-desktop.mjs` | 发布音频组件、压缩嵌入并构建单文件 |
