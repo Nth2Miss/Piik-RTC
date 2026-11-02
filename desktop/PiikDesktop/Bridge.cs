@@ -612,8 +612,28 @@ namespace PiikDesktop
             Win32.ShowWindow(window, Win32.SwShowNoActivate);
             if (previous != IntPtr.Zero && previous != window)
                 Win32.SetWindowPos(window, previous, 0, 0, 0, 0, Win32.SwpNomove | Win32.SwpNosize | Win32.SwpNoactivate);
+            if (Win32.GetForegroundWindow() == window) BringToForeground(previous);
             try { Win32.DwmFlush(); } catch { }
             _minimizedWindow = window;
+            WatchRestoredWindow(previous, window);
+        }
+
+        private async void WatchRestoredWindow(IntPtr previous, IntPtr window)
+        {
+            for (var attempt = 0; attempt < 20; attempt++)
+            {
+                try { await Task.Delay(attempt == 0 ? 80 : 150); } catch { return; }
+                if (_minimizedWindow != window || previous == IntPtr.Zero) return;
+                try
+                {
+                    if (Win32.GetForegroundWindow() == window)
+                    {
+                        BringToForeground(previous);
+                        Win32.SetWindowPos(window, previous, 0, 0, 0, 0, Win32.SwpNomove | Win32.SwpNosize | Win32.SwpNoactivate);
+                    }
+                }
+                catch { }
+            }
         }
 
         private void RestoreMinimizedWindow()
