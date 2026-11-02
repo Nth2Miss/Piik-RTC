@@ -28,6 +28,7 @@ namespace PiikDesktop
         private bool _setupMode;
         private IVideoCapture _video;
         private string _videoMode;
+        private volatile bool _nativeVideo;
         private AudioProcessHost _audio;
         private readonly NativeRtc _nativeRtc;
         private readonly object _bufferGate = new object();
@@ -147,16 +148,56 @@ namespace PiikDesktop
                         if (selected == null) throw new InvalidOperationException("共享来源已失效，请重新选择。");
                         _selected = selected;
                     }
-                    if (operation == "start" && _selected != null && _selected.Kind == "window" && _selected.Hwnd != 0)
+                    if (operation == "start")
                     {
-                        var previous = Win32.GetForegroundWindow();
-                        var source = new IntPtr(_selected.Hwnd);
-                        var minimized = Win32.IsIconic(source);
-                        var result = _nativeRtc.Command(payload, _selected);
-                        // The SDK's window capturer brings the source window to the
-                        // foreground; put focus/z-order back without touching capture.
-                        RestoreSharedWindow(previous, source, minimized);
-                        return result;
+                        // Escape hatch for A/B testing and rollback.
+                        if (GetBool(payload, "externalVideo")
+                            && string.Equals(Environment.GetEnvironmentVariable("PIIK_NATIVE_INTERNAL"), "1", StringComparison.Ordinal))
+                            payload["externalVideo"] = false;
+                        if (GetBool(payload, "externalVideo"))
+                        {
+                            try
+                            {
+                                // Oopz-style: WGC capture in the host, the native SDK
+                                // only encodes and publishes the pushed BGRA frames.
+                                StartVideo(new Dictionary<string, object>
+                                {
+                                    ["raw"] = true,
+                                    ["push"] = true,
+                                    ["width"] = GetInt(payload, "width"),
+                                    ["height"] = GetInt(payload, "height"),
+                                    ["fps"] = GetInt(payload, "fps"),
+                                });
+                            }
+                            catch (Exception exception)
+                            {
+                                Log.Write("WGC native source unavailable, falling back to SDK capture: " + exception.Message);
+                                StopVideo();
+                                payload["externalVideo"] = false;
+                            }
+                        }
+                        if (!GetBool(payload, "externalVideo") && _selected != null && _selected.Kind == "window" && _selected.Hwnd != 0)
+                        {
+                            var previous = Win32.GetForegroundWindow();
+                            var source = new IntPtr(_selected.Hwnd);
+                            var minimized = Win32.IsIconic(source);
+                            try
+                            {
+                                var result = _nativeRtc.Command(payload, _selected);
+                                // The SDK's window capturer brings the source window to the
+                                // foreground; put focus/z-order back without touching capture.
+                                RestoreSharedWindow(previous, source, minimized);
+                                return result;
+                            }
+                            catch { StopVideo(); throw; }
+                        }
+                        try { return _nativeRtc.Command(payload, _selected); }
+                        catch { StopVideo(); throw; }
+                    }
+                    if (operation == "stop" || operation == "leave")
+                    {
+                        StopVideo();
+                        return _nativeRtc.Command(payload, _selected);
                     }
                     return _nativeRtc.Command(payload, _selected);
                 case "capabilities":
@@ -281,14 +322,16 @@ namespace PiikDesktop
             var fps = GetInt(payload, "fps");
             if (fps <= 0) fps = 30;
             if (fps > 60) fps = 60;
+            var push = GetBool(payload, "push");
             StopVideo();
+            _nativeVideo = push;
 
             var wantRaw = GetBool(payload, "raw")
                 && width > 0 && height > 0
-                && (long)width * height <= 1920L * 1080L
+                && (long)width * height <= (push ? 4096L * 2160L : 1920L * 1080L)
                 && fps <= 60
                 && WgcCapture.IsSupported()
-                && SupportsSharedBuffers();
+                && (push || SupportsSharedBuffers());
             if (wantRaw)
             {
                 var capture = new WgcCapture(_selected, width, height, fps, PostRawFrame, EndVideo);
@@ -304,6 +347,7 @@ namespace PiikDesktop
                     try { capture.Stop(); } catch { }
                 }
             }
+            if (_video == null && push) throw new InvalidOperationException("当前系统或窗口不支持 WGC 采集，无法使用原生视频源。");
             if (_video == null)
             {
                 var capture = new VideoCapture(_selected, width, height, fps,
@@ -356,6 +400,12 @@ namespace PiikDesktop
         private void PostRawFrame(RawVideoFrame frame)
         {
             if (frame == null || frame.Data == null) return;
+            if (_nativeVideo)
+            {
+                try { _nativeRtc.PushVideo(frame); }
+                finally { frame.Release?.Invoke(); }
+                return;
+            }
             if (Interlocked.Increment(ref _pendingRawFrames) > 2)
             {
                 Interlocked.Increment(ref _rawDroppedPending);
@@ -531,6 +581,7 @@ namespace PiikDesktop
 
         private void StopVideo()
         {
+            _nativeVideo = false;
             var video = _video;
             _video = null;
             _videoMode = null;
@@ -656,9 +707,9 @@ namespace PiikDesktop
 
         public void StopAll()
         {
-            _nativeRtc.Leave();
             StopVideo();
             StopAudio();
+            _nativeRtc.Leave();
             _selected = null;
         }
 

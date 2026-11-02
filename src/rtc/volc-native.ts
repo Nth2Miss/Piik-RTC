@@ -220,7 +220,7 @@ export class VolcNativeAdapter implements RtcAdapter {
       audioStarted = true;
     }
     try {
-      await this.confirmed('publish',() => this.request('start',{sourceId:selection.sourceId,...size,fps:preferences.fps,bitrate:effectiveBitrate(preferences),audio,audioMode:selection.audio,externalAudio}));
+      await this.confirmed('publish',() => this.request('start',{sourceId:selection.sourceId,...size,fps:preferences.fps,bitrate:effectiveBitrate(preferences),audio,audioMode:selection.audio,externalAudio,externalVideo:true}));
     } catch (error) {
       if (audioStarted) void desktopBridge?.stopAudio?.().catch(() => {});
       throw error;

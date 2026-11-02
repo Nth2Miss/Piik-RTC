@@ -22,6 +22,7 @@ std::mutex gate;
 std::deque<std::string> events;
 std::atomic<bool> leaving{false};
 std::atomic<bool> externalAudio{false};
+std::atomic<bool> externalVideo{false};
 typedef void (__cdecl *PiikFrameCallback)(const char* stream, int width, int height, int rotation, const uint8_t* data, int length, int64_t timestamp_us);
 std::atomic<PiikFrameCallback> frameCallback{nullptr};
 std::atomic<bool> localFrames{false};
@@ -233,6 +234,7 @@ API int __cdecl piik_volc_join(const char* app, const char* roomId, const char* 
 }
 API int __cdecl piik_volc_stop() {
   if (!engine || !room) return 0;
+  externalVideo = false;
   const int result = room->publishStreamVideo(false);
   room->publishStreamAudio(false);
   engine->stopScreenVideoCapture(); engine->stopScreenAudioCapture();
@@ -255,35 +257,47 @@ API void __cdecl piik_volc_leave() {
   suppressActivation = false;
   suppressedWindow = nullptr;
   externalAudio = false;
+  externalVideo = false;
   leaving = false;
 }
-API int __cdecl piik_volc_start(int window, long long source, int x, int y, int width, int height, int fps, int bitrate, const char* audioProcess, int audio) {
+API int __cdecl piik_volc_start(int window, long long source, int x, int y, int width, int height, int fps, int bitrate, const char* audioProcess, int audio, int externalSource) {
   if (!engine || !room || leaving || width <= 0 || height <= 0 || fps < 1 || fps > 60 || bitrate < 1 || bitrate > 16000) return -1;
   bytertc::VideoEncoderConfig config{};
   config.width = width; config.height = height; config.frame_rate = fps; config.max_bitrate = bitrate;
   int result = engine->setVideoEncoderConfig(config); if (result < 0) return result;
-  InstallActivationHooks();
-  if (window && source) {
-    suppressedActivations = 0;
-    BeginActivationSuppression(reinterpret_cast<HWND>(static_cast<intptr_t>(source)));
-  }
-  auto* list = engine->getScreenCaptureSourceList();
-  if (!list) return -2;
-  bytertc::ScreenCaptureSourceInfo selected{};
-  bool found = false;
-  for (int i = 0; i < list->getCount(); ++i) {
-    const auto item = list->getSourceInfo(i);
-    if ((window && item.type == bytertc::kScreenCaptureSourceTypeWindow && reinterpret_cast<long long>(item.source_id) == source)
-        || (!window && item.type == bytertc::kScreenCaptureSourceTypeScreen && item.region_rect.x == x && item.region_rect.y == y)) {
-      selected = item; found = true; break;
+  externalVideo = false;
+  if (externalSource != 0) {
+    // WGC (host-side) is the source; the SDK only encodes and publishes frames
+    // pushed with piik_volc_push_video.
+    result = engine->setVideoSourceType(bytertc::kVideoSourceTypeExternal);
+    if (result < 0) return result;
+    externalVideo = true;
+  } else {
+    result = engine->setVideoSourceType(bytertc::kVideoSourceTypeInternal);
+    if (result < 0) return result;
+    InstallActivationHooks();
+    if (window && source) {
+      suppressedActivations = 0;
+      BeginActivationSuppression(reinterpret_cast<HWND>(static_cast<intptr_t>(source)));
     }
+    auto* list = engine->getScreenCaptureSourceList();
+    if (!list) return -2;
+    bytertc::ScreenCaptureSourceInfo selected{};
+    bool found = false;
+    for (int i = 0; i < list->getCount(); ++i) {
+      const auto item = list->getSourceInfo(i);
+      if ((window && item.type == bytertc::kScreenCaptureSourceTypeWindow && reinterpret_cast<long long>(item.source_id) == source)
+          || (!window && item.type == bytertc::kScreenCaptureSourceTypeScreen && item.region_rect.x == x && item.region_rect.y == y)) {
+        selected = item; found = true; break;
+      }
+    }
+    if (!found) { list->release(); return -3; }
+    bytertc::ScreenCaptureParameters params{};
+    params.highlight_config.enable_highlight = false;
+    result = engine->startScreenVideoCapture(selected, params);
+    list->release();
+    if (result < 0) return result;
   }
-  if (!found) { list->release(); return -3; }
-  bytertc::ScreenCaptureParameters params{};
-  params.highlight_config.enable_highlight = false;
-  result = engine->startScreenVideoCapture(selected, params);
-  list->release();
-  if (result < 0) return result;
   if (audio) {
     if (externalAudio) {
       result = engine->setScreenAudioSourceType(bytertc::kAudioSourceTypeExternal);
@@ -298,6 +312,19 @@ API int __cdecl piik_volc_start(int window, long long source, int x, int y, int 
   result = room->publishStreamVideo(true);
   if (result < 0) piik_volc_stop();
   return result;
+}
+API int __cdecl piik_volc_push_video(const void* data, int stride, int width, int height, int64_t timestamp_us) {
+  if (!engine || !externalVideo || leaving || !data || width <= 0 || height <= 0 || stride < width * 4) return -1;
+  bytertc::VideoFrameData frame{};
+  frame.buffer_type = bytertc::kVideoBufferTypeRawMemory;
+  frame.pixel_format = bytertc::kVideoPixelFormatBGRA;
+  frame.number_of_planes = 1;
+  frame.plane_data[0] = const_cast<uint8_t*>(static_cast<const uint8_t*>(data));
+  frame.plane_stride[0] = stride;
+  frame.width = width;
+  frame.height = height;
+  frame.timestamp_us = timestamp_us;
+  return engine->pushExternalVideoFrame(frame);
 }
 API void __cdecl piik_volc_set_frame_callback(PiikFrameCallback callback) { frameCallback = callback; }
 API int __cdecl piik_volc_enable_local_frames(int enabled) {
@@ -314,7 +341,8 @@ API int __cdecl piik_volc_enable_local_frames(int enabled) {
   }
   return 0;
 }
-API int __cdecl piik_volc_enable_remote_frames(const char* stream, int enabled) {  if (!engine || !stream || !*stream) return -1;
+API int __cdecl piik_volc_enable_remote_frames(const char* stream, int enabled) {
+  if (!engine || !stream || !*stream) return -1;
   const std::string id(stream);
   if (!enabled) {
     if (remoteSinkRegistered.erase(id)) {

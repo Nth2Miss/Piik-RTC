@@ -19,6 +19,8 @@ namespace PiikDesktop
         private int _remoteFrameErrors;
         private bool _frameCallbackSet;
         private bool _hooksLogged;
+        private volatile bool _externalVideo;
+        private int _videoPushErrors;
         private FrameCallback _frameCallback;
         public event Action<string, int, int, int, byte[], long> Frame;
         private readonly object _audioGate = new object();
@@ -104,7 +106,8 @@ namespace PiikDesktop
                     return new Dictionary<string, object> { ["width"] = Math.Max(2, (int)(bounds.Width * scale) / 2 * 2), ["height"] = Math.Max(2, (int)(bounds.Height * scale) / 2 * 2) };
                 case "start":
                     if (!_joined || selected == null) throw new InvalidOperationException("媒体未连接或共享来源已失效。");
-                    var rect = SourceBounds(selected);
+                    var externalVideo = Bridge.GetBool(args, "externalVideo");
+                    var rect = externalVideo ? System.Drawing.Rectangle.Empty : SourceBounds(selected);
                     var process = "";
                     if (Bridge.GetString(args, "audioMode") == "app")
                     {
@@ -114,19 +117,33 @@ namespace PiikDesktop
                     var externalAudio = Bridge.GetBool(args, "externalAudio");
                     SetScreenAudio(externalAudio ? 1 : 0);
                     var audio = Bridge.GetBool(args, "audio");
-                    Log.Write("native start: " + selected.Kind + " " + Bridge.GetInt(args, "width") + "x" + Bridge.GetInt(args, "height") + " fps=" + Bridge.GetInt(args, "fps") + " bitrate=" + Bridge.GetInt(args, "bitrate") + " audio=" + audio + (process.Length > 0 ? " process=" + process : ""));
-                    var startResult = Start(selected.Kind == "window" ? 1 : 0, selected.Hwnd, rect.X, rect.Y,
-                        Bridge.GetInt(args, "width"), Bridge.GetInt(args, "height"), Bridge.GetInt(args, "fps"), Bridge.GetInt(args, "bitrate"), process, audio ? 1 : 0);
-                    if (!_hooksLogged)
+                    Log.Write("native start: " + selected.Kind + " " + Bridge.GetInt(args, "width") + "x" + Bridge.GetInt(args, "height") + " fps=" + Bridge.GetInt(args, "fps") + " bitrate=" + Bridge.GetInt(args, "bitrate") + " audio=" + audio + " externalVideo=" + externalVideo + (process.Length > 0 ? " process=" + process : ""));
+                    _externalVideo = externalVideo;
+                    int startResult;
+                    try
                     {
-                        _hooksLogged = true;
-                        Log.Write("native activation hooks=" + ActivationHooksInstalled());
+                        startResult = Start(selected.Kind == "window" ? 1 : 0, selected.Hwnd, rect.X, rect.Y,
+                            Bridge.GetInt(args, "width"), Bridge.GetInt(args, "height"), Bridge.GetInt(args, "fps"), Bridge.GetInt(args, "bitrate"), process, audio ? 1 : 0, externalVideo ? 1 : 0);
                     }
-                    var suppressed = SuppressedActivations();
-                    if (suppressed > 0) Log.Write("native activation suppressed: " + suppressed);
+                    catch
+                    {
+                        _externalVideo = false;
+                        throw;
+                    }
+                    if (!externalVideo)
+                    {
+                        if (!_hooksLogged)
+                        {
+                            _hooksLogged = true;
+                            Log.Write("native activation hooks=" + ActivationHooksInstalled());
+                        }
+                        var suppressed = SuppressedActivations();
+                        if (suppressed > 0) Log.Write("native activation suppressed: " + suppressed);
+                    }
                     return Ok(startResult);
                 case "stop":
                     var stopResult = Stop();
+                    _externalVideo = false;
                     var stopSuppressed = SuppressedActivations();
                     if (stopSuppressed > 0) Log.Write("native activation suppressed: " + stopSuppressed);
                     return Ok(stopResult);
@@ -161,6 +178,21 @@ namespace PiikDesktop
             catch { return; }
             var stream = streamPtr == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(streamPtr) ?? "";
             Frame?.Invoke(stream, width, height, rotation, bytes, timestampUs);
+        }
+        public void PushVideo(RawVideoFrame frame)
+        {
+            if (!_joined || !_externalVideo || Volatile.Read(ref _leaving) != 0 || frame?.Data == null || frame.Length <= 0) return;
+            var handle = GCHandle.Alloc(frame.Data, GCHandleType.Pinned);
+            try
+            {
+                var result = PushVideoNative(handle.AddrOfPinnedObject(), frame.Stride, frame.Width, frame.Height, frame.TimestampUs);
+                if (result < 0 && Interlocked.Increment(ref _videoPushErrors) == 1) Log.Write("native video push failed: " + result);
+            }
+            catch (Exception exception)
+            {
+                if (Interlocked.Increment(ref _videoPushErrors) == 1) Log.Write("native video push failed: " + exception.Message);
+            }
+            finally { handle.Free(); }
         }
         public void PushAudio(byte[] data, int length, AudioFormat format)
         {
@@ -255,6 +287,7 @@ namespace PiikDesktop
             // Clear the flag before entering the SDK: its teardown can pump
             // window messages, and a re-entrant leave must not destroy twice.
             _joined = false;
+            _externalVideo = false;
             var watch = Stopwatch.StartNew();
             Log.Write("native leave begin");
             try { NativeLeave(); }
@@ -275,7 +308,8 @@ namespace PiikDesktop
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr LoadLibraryEx(string file, IntPtr reserved, uint flags);
         [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_join", CallingConvention = CallingConvention.Cdecl)] private static extern int Join(string app, string room, string token, string uid);
         [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_leave", CallingConvention = CallingConvention.Cdecl)] private static extern void NativeLeave();
-        [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_start", CallingConvention = CallingConvention.Cdecl)] private static extern int Start(int window, long source, int x, int y, int width, int height, int fps, int bitrate, string process, int audio);
+        [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_start", CallingConvention = CallingConvention.Cdecl)] private static extern int Start(int window, long source, int x, int y, int width, int height, int fps, int bitrate, string process, int audio, int externalSource);
+        [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_push_video", CallingConvention = CallingConvention.Cdecl)] private static extern int PushVideoNative(IntPtr data, int stride, int width, int height, long timestampUs);
         [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_stop", CallingConvention = CallingConvention.Cdecl)] private static extern int Stop();
         [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_set_screen_audio", CallingConvention = CallingConvention.Cdecl)] private static extern void SetScreenAudio(int external);
         [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_push_audio", CallingConvention = CallingConvention.Cdecl)] private static extern int PushScreenAudio(byte[] data, int length, int sampleRate, int channels);

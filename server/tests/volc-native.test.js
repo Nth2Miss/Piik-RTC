@@ -42,7 +42,7 @@ test('原生共享使用真实 SDK 来源和16Mbps配置，不创建浏览器采
   const start = calls.find(call=>call.operation==='start');
   assert.equal(start.bitrate,16000); assert.equal(start.fps,60);
   assert.equal(start.sourceId,selection.sourceId); assert.equal(start.audioMode,'app');
-  assert.equal(start.audio,true); assert.equal(start.externalAudio,true);
+  assert.equal(start.audio,true); assert.equal(start.externalAudio,true); assert.equal(start.externalVideo,true);
   await adapter.unpublish(capture.tracks); capture.close();
   assert.equal(capture.tracks[0].enabled,false);
   assert.equal(calls.some(call=>call.operation==='stop'),true);
