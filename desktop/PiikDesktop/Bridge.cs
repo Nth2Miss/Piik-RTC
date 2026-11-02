@@ -28,6 +28,7 @@ namespace PiikDesktop
         private IVideoCapture _video;
         private string _videoMode;
         private AudioProcessHost _audio;
+        private readonly NativeRtc _nativeRtc;
         private readonly object _bufferGate = new object();
         private readonly List<CoreWebView2SharedBuffer> _freeBuffers = new List<CoreWebView2SharedBuffer>();
         private readonly Dictionary<int, CoreWebView2SharedBuffer> _inFlightBuffers = new Dictionary<int, CoreWebView2SharedBuffer>();
@@ -38,10 +39,11 @@ namespace PiikDesktop
         private long _rawDroppedBuffer;
         private System.Threading.Timer _rawStats;
 
-        public Bridge(IBridgeHost host, CoreWebView2 core)
+        public Bridge(IBridgeHost host, CoreWebView2 core, IntPtr videoParent)
         {
             _host = host;
             _core = core;
+            _nativeRtc = new NativeRtc(videoParent);
             _uiContext = SynchronizationContext.Current;
             _rawStats = new System.Threading.Timer(LogRawStats, null, 2000, 2000);
         }
@@ -131,6 +133,14 @@ namespace PiikDesktop
         {
             switch (type)
             {
+                case "nativeRtc":
+                    if (GetString(payload, "operation") == "prepare" || GetString(payload, "operation") == "start")
+                    {
+                        var selected = FindSource(GetString(payload, "sourceId"));
+                        if (selected == null) throw new InvalidOperationException("共享来源已失效，请重新选择。");
+                        _selected = selected;
+                    }
+                    return _nativeRtc.Command(payload, _selected);
                 case "capabilities":
                     return SourceList.Capabilities();
 
@@ -513,6 +523,7 @@ namespace PiikDesktop
 
         public void StopAll()
         {
+            _nativeRtc.Leave();
             StopVideo();
             StopAudio();
             _selected = null;

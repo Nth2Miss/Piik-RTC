@@ -259,7 +259,7 @@ export function createRoomService() {
       shareAttempts:shareDiagnostics.export(),
       capturedAt:new Date().toISOString(),
       capturePipeline:capture?.diagnostics?.() ?? lastCapturePipeline,
-      app:{ name:'piik-rtc', mediaRevision:'2026-11-02-gentle-recovery-v6', sdk:!state.room ? '未连接' : state.room.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${getAgoraSdk().VERSION}`, secureContext:window.isSecureContext },
+      app:{ name:'piik-rtc', mediaRevision:'2026-11-02-native-rtc-v1', sdk:client.nativeRtc ? 'volc-native 3.60.107.2100' : !state.room ? '未连接' : state.room.provider && state.room.provider !== 'agora' ? state.room.provider : `agora ${getAgoraSdk().VERSION}`, secureContext:window.isSecureContext },
       environment:{
         userAgent:navigator.userAgent, platform:navigator.platform, language:navigator.language,
         languages:[...navigator.languages], hardwareConcurrency:navigator.hardwareConcurrency,
@@ -626,7 +626,7 @@ export function createRoomService() {
     const next = await (async (): Promise<Awaited<ReturnType<typeof captureScreen>>> => {
       try {
         return selection
-          ? await captureDesktopScreen(selection, sharePreferences, captureTracks, message => notify(message, true), {provider:state.room?.provider,onDiagnostics:stats => { lastCapturePipeline = stats; }})
+          ? client.nativeRtc ? await client.captureNative(selection,sharePreferences) : await captureDesktopScreen(selection, sharePreferences, captureTracks, message => notify(message, true), {provider:state.room?.provider,onDiagnostics:stats => { lastCapturePipeline = stats; }})
           : await captureScreen(sharePreferences, captureTracks, undefined, undefined, isZego);
       } catch (error) {
         if (connectedBeforeCapture) await disconnectMedia();

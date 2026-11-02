@@ -106,3 +106,10 @@ const manifest = path.join(release, 'version.json');
 writeFileSync(manifest, JSON.stringify({ version: packageVersion, exe: path.basename(target) }) + '\n');
 console.log(`单文件桌面端：${target}（${(statSync(target).size / 1024 / 1024).toFixed(2)} MB）`);
 console.log(`版本清单：${manifest}`);
+if (process.argv.includes('--native-rtc')) {
+  run(process.execPath, [path.join(root, 'scripts', 'build-native-rtc.mjs')]);
+  const archive = path.join(release, `Piik-RTC-native-v${packageVersion}.zip`);
+  const quote = value => "'" + value.replaceAll("'", "''") + "'";
+  run('powershell.exe', ['-NoProfile', '-Command', `Compress-Archive -LiteralPath ${quote(target)},${quote(path.join(release, 'native-volc'))} -DestinationPath ${quote(archive)} -Force`]);
+  console.log(`原生测试压缩包：${archive}（${(statSync(archive).size / 1024 / 1024).toFixed(2)} MB）`);
+}

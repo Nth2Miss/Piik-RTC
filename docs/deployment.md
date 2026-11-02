@@ -57,6 +57,7 @@ npm start
 ```
 
 - `npm run build` 先执行 TypeScript 检查，再构建前端到 `dist/`。
+- 火山原生测试桌面端须搭配本分支网页资源，浏览器观看也应更新以支持新版原生流；服务端无需安装原生 DLL，参见[原生测试说明](native-rtc.md)。
 - `npm start` 以生产模式启动 `server/index.js`，由 Express 直接提供 `dist/` 静态文件。
 - 开发调试使用 `npm run dev`，Vite 以中间件模式运行并支持热更新。
 - 默认访问 `http://localhost:3000`，可用 `PORT` 修改。

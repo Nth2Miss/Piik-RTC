@@ -39,6 +39,7 @@ export type LocalVideoTrack = ILocalVideoTrack | BrowserLocalVideoTrack;
 export type VideoTrack = LocalVideoTrack | IRemoteVideoTrack | BrowserVideoTrack;
 export type AudioTrack = IRemoteAudioTrack | BrowserAudioTrack;
 export interface RtcRemoteUser {
+  streamIndex?: 0 | 1;
   uid: UID;
   publicationRevision?: number;
   hasAudio: boolean;

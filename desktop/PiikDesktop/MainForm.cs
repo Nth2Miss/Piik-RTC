@@ -302,7 +302,7 @@ namespace PiikDesktop
                 var shim = ResourceText("Piik.Shim.js");
                 if (!string.IsNullOrEmpty(shim)) await core.AddScriptToExecuteOnDocumentCreatedAsync(shim);
 
-                _bridge = new Bridge(this, core);
+                _bridge = new Bridge(this, core, _webView.Handle);
                 core.WebMessageReceived += (_, eventArgs) =>
                 {
                     var source = eventArgs.Source ?? "";

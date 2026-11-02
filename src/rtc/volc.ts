@@ -56,16 +56,25 @@ export class VolcRtcAdapter implements RtcAdapter {
       else if (state === 5) this.events.emit('connection-state-change', 'CONNECTED');
       else if (state === 1) this.events.emit('connection-state-change', 'DISCONNECTED');
     });
-    engine.on(rtc.events.onUserPublishScreen, ({ userId, mediaType }) => {
+    const published = (index: 0 | 1) => ({ userId, mediaType }: {userId:string;mediaType:number}) => {
       if (this.engine !== engine) return;
       const user = this.remote(Number(userId));
+      if (user.streamIndex !== undefined && user.streamIndex !== index) {
+        user.videoTrack?.stop(); user.audioTrack?.stop(); user.videoTrack = undefined; user.audioTrack = undefined;
+        user.hasAudio = false; user.hasVideo = false; this.subscriptions.cancel(user);
+        user.publicationRevision = (user.publicationRevision ?? 0) + 1;
+      }
+      user.streamIndex = index;
       if ((mediaType & 2) && !user.hasVideo) user.publicationRevision = (user.publicationRevision ?? 0) + 1;
       if (mediaType & 1) user.hasAudio = true; if (mediaType & 2) user.hasVideo = true;
       if (mediaType & 2) this.events.emit('user-published', user, 'video'); if (mediaType & 1) this.events.emit('user-published', user, 'audio');
-    });
-    engine.on(rtc.events.onUserUnpublishScreen, ({ userId, mediaType }) => {
+    };
+    engine.on(rtc.events.onUserPublishScreen, published(1));
+    if (rtc.events.onUserPublishStream) engine.on(rtc.events.onUserPublishStream, published(0));
+    const unpublished = (index: 0 | 1) => ({ userId, mediaType }: {userId:string;mediaType:number}) => {
       if (this.engine !== engine) return;
       const user = this.remote(Number(userId));
+      if ((user.streamIndex ?? 1) !== index) return;
       if (mediaType & 2) {
         user.hasVideo = false;
         user.videoTrack?.stop(); user.videoTrack = undefined;
@@ -77,7 +86,9 @@ export class VolcRtcAdapter implements RtcAdapter {
       if (mediaType & 1) { user.hasAudio = false; user.audioTrack?.stop(); user.audioTrack = undefined; }
       if (mediaType & 2) this.events.emit('user-unpublished', user, 'video');
       if (mediaType & 1) this.events.emit('user-unpublished', user, 'audio');
-    });
+    };
+    engine.on(rtc.events.onUserUnpublishScreen, unpublished(1));
+    if (rtc.events.onUserUnpublishStream) engine.on(rtc.events.onUserUnpublishStream, unpublished(0));
     engine.on(rtc.events.onUserLeave, ({ userInfo }) => {
       if (this.engine !== engine) return;
       const id = Number(userInfo?.userId), user = this.remotes.get(id);
@@ -104,7 +115,7 @@ export class VolcRtcAdapter implements RtcAdapter {
       const id = Number(stats?.userId);
       if (!Number.isSafeInteger(id) || id <= 0) return;
       this.remoteQuality.set(id, Number(stats?.rxQuality) || 0);
-      if (stats?.isScreen && stats.videoStats) this.remoteScreen.set(id, { at:Date.now(), stats:{...stats.videoStats} });
+      if ((stats?.isScreen || this.remotes.get(id)?.streamIndex === 0) && stats.videoStats) this.remoteScreen.set(id, { at:Date.now(), stats:{...stats.videoStats} });
     });
     await engine.joinRoom(token, room, { userId:String(uid) }, { isAutoPublish:false, isAutoSubscribeAudio:false, isAutoSubscribeVideo:false });
     if (this.engine !== engine) throw new Error('媒体连接已取消。');
@@ -240,7 +251,7 @@ export class VolcRtcAdapter implements RtcAdapter {
     let volume = 100, playing = false;
     const apply = () => {
       if (this.engine === engine && this.remotes.get(uid) === user && user?.publicationRevision === publicationRevision)
-        engine.setPlaybackVolume(id, sdk.StreamIndex.STREAM_INDEX_SCREEN, playing ? volume : 0);
+        engine.setPlaybackVolume(id, user?.streamIndex === 0 ? sdk.StreamIndex.STREAM_INDEX_MAIN : sdk.StreamIndex.STREAM_INDEX_SCREEN, playing ? volume : 0);
     };
     // The engine starts audio on subscription; hold it until the controller plays it.
     apply();
@@ -254,19 +265,19 @@ export class VolcRtcAdapter implements RtcAdapter {
     const { engine, sdk } = this.context();
     const publicationRevision = user.publicationRevision;
     const mediaType = kind === 'audio' ? sdk.MediaType.AUDIO : sdk.MediaType.VIDEO;
-    await this.subscriptions.run(user, signal, () => engine.subscribeScreen(String(user.uid), mediaType), () => {
+    await this.subscriptions.run(user, signal, () => user.streamIndex === 0 ? engine.subscribeStream(String(user.uid), mediaType) : engine.subscribeScreen(String(user.uid), mediaType), () => {
       if (kind === 'audio') { user.audioTrack = this.playbackTrack(Number(user.uid)); return; }
-      const track = engine.getRemoteStreamTrack(String(user.uid), sdk.StreamIndex.STREAM_INDEX_SCREEN, kind);
+      const track = engine.getRemoteStreamTrack(String(user.uid), user.streamIndex === 0 ? sdk.StreamIndex.STREAM_INDEX_MAIN : sdk.StreamIndex.STREAM_INDEX_SCREEN, kind);
       if (track) user.videoTrack = browserVideoTrack(track);
     }, () => {
-      if (this.engine === engine && user.publicationRevision === publicationRevision) return engine.unsubscribeScreen(String(user.uid), mediaType);
+      if (this.engine === engine && user.publicationRevision === publicationRevision) return user.streamIndex === 0 ? engine.unsubscribeStream(String(user.uid), mediaType) : engine.unsubscribeScreen(String(user.uid), mediaType);
     });
   }
   async unsubscribe(user: RtcRemoteUser) {
     const publicationRevision = user.publicationRevision;
     this.subscriptions.cancel(user);
     user.audioTrack?.stop(); user.videoTrack?.stop();
-    if (this.engine && this.sdk && (user.hasVideo || user.hasAudio)) await this.engine.unsubscribeScreen(String(user.uid), this.sdk.MediaType.AUDIO_AND_VIDEO);
+    if (this.engine && this.sdk && (user.hasVideo || user.hasAudio)) await (user.streamIndex === 0 ? this.engine.unsubscribeStream(String(user.uid), this.sdk.MediaType.AUDIO_AND_VIDEO) : this.engine.unsubscribeScreen(String(user.uid), this.sdk.MediaType.AUDIO_AND_VIDEO));
     if (user.publicationRevision !== publicationRevision) return;
     this.remoteScreen.delete(Number(user.uid));
     this.cache.delete(`volc:remote:${user.uid}`);

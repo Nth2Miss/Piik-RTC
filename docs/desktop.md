@@ -1,5 +1,7 @@
 # Piik-RTC 桌面端
 
+本分支可选接入火山原生 RTC，详见[原生测试说明](native-rtc.md)。该模式需要额外的 `native-volc` 目录；下文单文件和 Web SDK 说明适用于未安装原生组件的普通模式。
+
 桌面端是一个 **单文件、免安装** 的 Windows 程序（约 6.4 MB），不是网页套壳：
 
 - 使用系统自带的 Microsoft Edge WebView2 加载现有 React 界面和声网、即构、火山引擎 RTC Web SDK。

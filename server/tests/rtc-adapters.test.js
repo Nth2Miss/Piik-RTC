@@ -65,6 +65,30 @@ function zegoFixture(raw, overrides = {}) {
   const sdk = { ZegoExpressEngine:class { constructor() { calls.push(['create']); return engine; } } };
   return { sdk, calls, engine, announce:() => handlers.get('roomStreamUpdate')('room','ADD',[{user:{userID:'7'},streamID:'room_7'}]) };
 }
+
+test('火山网页接收原生新版主流：订阅主流并忽略旧屏幕流撤销', async t => {
+  const raw = browser(t), f = volcFixture(raw,{
+    subscribeStream:async (_uid,kind)=>f.calls.push(['subscribe-main',kind]),
+    unsubscribeStream:async (_uid,kind)=>f.calls.push(['unsubscribe-main',kind]),
+    getRemoteStreamTrack:(_uid,index)=>{f.calls.push(['remote-index',index]);return raw.video;},
+  });
+  f.sdk.default.events.onUserPublishStream = 'main-published';
+  f.sdk.default.events.onUserUnpublishStream = 'main-unpublished';
+  f.sdk.StreamIndex.STREAM_INDEX_MAIN = 0;
+  const adapter = new VolcRtcAdapter({emit(){}},async()=>f.sdk);
+  await adapter.join('app','room','fake-token',1); t.after(()=>adapter.leave());
+  f.emit('main-published',{userId:'7',mediaType:3});
+  const user = adapter.remoteUsers[0];
+  await adapter.subscribe(user,'video');
+  assert.equal(user.streamIndex,0);
+  assert.equal(f.calls.some(([name,index])=>name==='remote-index'&&index===0),true);
+  f.emit('onUserUnpublishScreen',{userId:'7',mediaType:3});
+  assert.equal(user.hasVideo,true);
+  f.emit('onRemoteStreamStats',{userId:'7',isScreen:false,videoStats:{width:1920,height:1080,rendererOutputFrameRate:55}});
+  assert.equal(adapter.getRemoteVideoStats()['7'].renderFrameRate,55);
+  await adapter.unsubscribe(user);
+  assert.equal(f.calls.some(([name])=>name==='unsubscribe-main'),true);
+});
 function agoraFixture(overrides = {}) {
   const calls = [];
   const client = { remoteUsers:[], on() {}, join:async () => 42, leave:async () => calls.push(['leave']),

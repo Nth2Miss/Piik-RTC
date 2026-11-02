@@ -99,6 +99,7 @@ export interface DesktopVideoStartResult {
 }
 
 export interface DesktopBridge {
+  nativeRtc?(options: Record<string, unknown>): Promise<Record<string, unknown>>;
   isDesktop: true;
   captureMode?: 'webview2';
   platform: string;

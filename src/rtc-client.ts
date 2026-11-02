@@ -4,6 +4,8 @@ import type { RtcProvider } from './types';
 import { AgoraRtcAdapter } from './rtc/agora.ts';
 import { VolcRtcAdapter } from './rtc/volc.ts';
 import { ZegoRtcAdapter } from './rtc/zego.ts';
+import { VolcNativeAdapter } from './rtc/volc-native.ts';
+import type { CaptureSelection } from './desktop/bridge';
 import type { LocalTrack, MediaKind, RtcAdapter, RtcEventMap, RtcEventName, RtcEventSink, RtcListener, RtcRemoteUser } from './rtc/types';
 
 /** Keeps room orchestration independent from provider-specific RTC SDKs. */
@@ -36,7 +38,12 @@ export class RtcClient {
   async setProvider(provider: RtcProvider) {
     if (provider === 'agora') this.adapter = await AgoraRtcAdapter.create(this.events, this.loaders.agora);
     else if (provider === 'zego') this.adapter = new ZegoRtcAdapter(this.events, this.loaders.zego);
-    else this.adapter = new VolcRtcAdapter(this.events, this.loaders.volc);
+    else this.adapter = (!this.loaders.volc && await VolcNativeAdapter.create(this.events)) || new VolcRtcAdapter(this.events, this.loaders.volc);
+  }
+  get nativeRtc() { return this.adapter instanceof VolcNativeAdapter; }
+  captureNative(selection: CaptureSelection, preferences: Preferences) {
+    if (!(this.adapter instanceof VolcNativeAdapter)) throw new Error('原生媒体组件尚未初始化。');
+    return this.adapter.capture(selection,preferences);
   }
   join(appId: string | number, room: string, token: string, uid: number): Promise<UID> {
     return this.current().join(appId, room, token, uid);

@@ -111,6 +111,7 @@
     isDesktop: true,
     captureMode: 'webview2',
     platform: 'win32',
+    nativeRtc: function (options) { return request('nativeRtc', options); },
     capabilities: function () { return request('capabilities'); },
     listSources: function () { return request('listSources'); },
     selectSource: function (id) { return request('selectSource', { id: id }); },
