@@ -355,6 +355,9 @@ namespace PiikDesktop
         [DllImport("user32.dll")]
         private static extern bool GetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
 
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
+
         private static string MinimizedWindowThumbnail(IntPtr hwnd)
         {
             lock (MinimizedThumbnailGate)
@@ -363,38 +366,37 @@ namespace PiikDesktop
                     return cached.Data;
             }
             if (!Win32.IsWindowVisible(hwnd) || !Responsive(hwnd)) return "";
-            var previous = Win32.GetForegroundWindow();
             var data = "";
-            try
+            var placement = new WindowPlacement { Length = Marshal.SizeOf(typeof(WindowPlacement)) };
+            if (GetWindowPlacement(hwnd, ref placement))
             {
-                // WM_PRINT generally fails while a window is minimized. Restore it
-                // without activation, capture it behind the picker, then minimize.
-                Win32.ShowWindow(hwnd, Win32.SwShowNoActivate);
-                if (previous != IntPtr.Zero && previous != hwnd)
-                    Win32.SetWindowPos(hwnd, previous, 0, 0, 0, 0, Win32.SwpNomove | Win32.SwpNosize | Win32.SwpNoactivate);
-                if (Win32.GetForegroundWindow() == hwnd) BringToForeground(previous);
-                try { Win32.DwmFlush(); } catch { }
-                Thread.Sleep(120);
-                data = WindowThumbnail(hwnd);
-            }
-            catch { }
-            finally
-            {
-                try { if (!Win32.IsIconic(hwnd)) Win32.ShowWindow(hwnd, Win32.SwMinimize); } catch { }
+                var original = placement;
+                var normal = placement.NormalPosition;
+                var width = Math.Max(2, normal.Right - normal.Left);
+                var height = Math.Max(2, normal.Bottom - normal.Top);
+                // Restore off-screen so the user never sees a row of minimized
+                // windows popping out while the picker collects thumbnails.
+                placement.ShowCmd = Win32.SwShowNoActivate;
+                placement.NormalPosition.Left = -32000;
+                placement.NormalPosition.Top = -32000;
+                placement.NormalPosition.Right = -32000 + width;
+                placement.NormalPosition.Bottom = -32000 + height;
+                try
+                {
+                    if (SetWindowPlacement(hwnd, ref placement))
+                    {
+                        Thread.Sleep(100);
+                        data = WindowThumbnail(hwnd);
+                    }
+                }
+                catch { }
+                finally
+                {
+                    try { SetWindowPlacement(hwnd, ref original); } catch { }
+                }
             }
             lock (MinimizedThumbnailGate) MinimizedThumbnailCache[hwnd] = (data, DateTime.UtcNow);
             return data;
-        }
-
-        private static void BringToForeground(IntPtr target)
-        {
-            if (target == IntPtr.Zero) return;
-            var foreground = Win32.GetForegroundWindow();
-            var foregroundThread = Win32.GetWindowThreadProcessId(foreground, out _);
-            var currentThread = Win32.GetCurrentThreadId();
-            var attached = foregroundThread != 0 && foregroundThread != currentThread && Win32.AttachThreadInput(currentThread, foregroundThread, true);
-            try { Win32.SetForegroundWindow(target); }
-            finally { if (attached) Win32.AttachThreadInput(currentThread, foregroundThread, false); }
         }
 
         private static string WindowThumbnail(IntPtr hwnd)
@@ -429,7 +431,7 @@ namespace PiikDesktop
                     try { captured = Win32.PrintWindow(hwnd, deviceContext, Win32.PwRenderFullContent); }
                     finally { graphics.ReleaseHdc(deviceContext); }
                 }
-                if (!captured && !iconic)
+                if (!captured && !iconic && rect.Left > -30000 && rect.Top > -30000)
                 {
                     try
                     {
