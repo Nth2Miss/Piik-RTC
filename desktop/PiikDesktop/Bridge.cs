@@ -163,7 +163,7 @@ namespace PiikDesktop
                             {
                                 // Oopz-style: WGC capture in the host, the native SDK
                                 // only encodes and publishes the pushed BGRA frames.
-                                StartVideo(new Dictionary<string, object>
+                                var started = StartVideo(new Dictionary<string, object>
                                 {
                                     ["raw"] = true,
                                     ["push"] = true,
@@ -171,6 +171,13 @@ namespace PiikDesktop
                                     ["height"] = GetInt(payload, "height"),
                                     ["fps"] = GetInt(payload, "fps"),
                                 });
+                                // WGC may round the target to the source aspect/size;
+                                // configure the encoder for the frames we actually push.
+                                if (started.TryGetValue("width", out var actualWidth) && started.TryGetValue("height", out var actualHeight))
+                                {
+                                    payload["width"] = Convert.ToInt32(actualWidth, System.Globalization.CultureInfo.InvariantCulture);
+                                    payload["height"] = Convert.ToInt32(actualHeight, System.Globalization.CultureInfo.InvariantCulture);
+                                }
                             }
                             catch (Exception exception)
                             {
