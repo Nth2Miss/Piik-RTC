@@ -7,6 +7,8 @@
   var audioEnded = new Set();
   var videoFrames = new Set();
   var rawVideoFrames = new Set();
+  var nativeVideoFrames = new Set();
+  var nativeTimestamp = 0;
   var videoEnded = new Set();
 
   // The WinForms context menu lives outside WebView2, so the page has to tell
@@ -86,6 +88,7 @@
     var buffer = event.getBuffer ? event.getBuffer() : null;
     if (!buffer) return;
     var frame = null;
+    var native = false;
     try {
       if (info.type === 'video-frame-raw'
         && rawVideoFrames.size > 0
@@ -97,6 +100,24 @@
           timestamp: info.timestamp,
           layout: [{ offset: 0, stride: info.stride }],
         });
+      } else if (info.type === 'native-frame'
+        && nativeVideoFrames.size > 0
+        && typeof VideoFrame === 'function') {
+        var width = info.width, height = info.height;
+        var chromaWidth = Math.ceil(width / 2), chromaHeight = Math.ceil(height / 2);
+        native = true;
+        nativeTimestamp = Math.max(info.timestamp || 0, nativeTimestamp + 1);
+        frame = new VideoFrame(buffer, {
+          format: 'I420',
+          codedWidth: width,
+          codedHeight: height,
+          timestamp: nativeTimestamp,
+          layout: [
+            { offset: 0, stride: width },
+            { offset: width * height, stride: chromaWidth },
+            { offset: width * height + chromaWidth * chromaHeight, stride: chromaWidth },
+          ],
+        });
       }
     } catch (error) {
       console.error('raw video frame failed', error);
@@ -104,7 +125,10 @@
       try { webview.releaseBuffer(buffer); } catch (error) { }
       webview.postMessage({ type: 'video-frame-consumed', bufferId: info.bufferId });
     }
-    if (frame) emit(rawVideoFrames, { frame: frame, width: info.width, height: info.height, seq: info.seq });
+    if (frame) {
+      if (native) emit(nativeVideoFrames, { frame: frame, stream: info.stream || '', width: info.width, height: info.height, seq: info.seq });
+      else emit(rawVideoFrames, { frame: frame, width: info.width, height: info.height, seq: info.seq });
+    }
   });
 
   var api = {
@@ -120,6 +144,7 @@
     stopVideo: function () { return request('stopVideo'); },
     onVideoFrame: subscribe(videoFrames),
     onVideoFrameRaw: subscribe(rawVideoFrames),
+    onNativeFrame: subscribe(nativeVideoFrames),
     onVideoEnded: subscribe(videoEnded),
     startAudio: function (options) { return request('startAudio', options); },
     stopAudio: function () { return request('stopAudio'); },

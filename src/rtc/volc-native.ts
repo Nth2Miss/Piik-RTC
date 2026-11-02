@@ -1,10 +1,12 @@
 import type { CapturedScreen } from '../capture';
 import { desktopBridge, type CaptureSelection, type DesktopBridge } from '../desktop/bridge.ts';
 import { effectiveBitrate, encoderConfig, type Preferences } from '../preferences.ts';
+import { browserVideoTrack } from './browser.ts';
 import type { BrowserLocalVideoTrack, BrowserVideoTrack, LocalTrack, LocalVideoStats, MediaKind, RemoteVideoStats, RtcAdapter, RtcEventSink, RtcRemoteUser } from './types';
 import { diagnosticNumber, encodingDiagnostics, statisticsObservation } from './diagnostics.ts';
 
 type Command = NonNullable<DesktopBridge['nativeRtc']>;
+type FrameTrack = BrowserVideoTrack & { getMediaStreamTrack(): MediaStreamTrack; close(): void };
 const selections = new WeakMap<LocalTrack, CaptureSelection>();
 const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : 0;
 
@@ -21,7 +23,14 @@ export class VolcNativeAdapter implements RtcAdapter {
   private output = new Map<string, number>();
   private events: RtcEventSink;
   private command: Command;
-  constructor(events: RtcEventSink, command: Command) { this.events = events; this.command = command; }
+  private frameConsumers = new Map<string, (frame: VideoFrame) => void>();
+  constructor(events: RtcEventSink, command: Command) {
+    this.events = events; this.command = command;
+    desktopBridge?.onNativeFrame?.(({ frame, stream }) => {
+      const consumer = this.frameConsumers.get(stream);
+      if (consumer) consumer(frame); else frame.close();
+    });
+  }
   static async create(events: RtcEventSink) {
     if (!desktopBridge?.nativeRtc) return undefined;
     const command = desktopBridge.nativeRtc;
@@ -111,19 +120,88 @@ export class VolcNativeAdapter implements RtcAdapter {
     for (const waiter of this.waiters.values()) waiter.reject(new Error('媒体连接已取消。'));
     this.waiters.clear();
     this.users.forEach(user => {user.videoTrack?.stop();user.audioTrack?.stop();});
+    await desktopBridge?.stopAudio?.().catch(() => {});
     await this.request('leave');
     this.users.clear(); this.remote = {}; this.local = {}; this.output.clear();
     this.events.emit('connection-state-change','DISCONNECTED');
+  }
+  private frameTrack(stream: string): FrameTrack {
+    let generator: MediaStreamTrackGenerator | undefined;
+    let writer: WritableStreamDefaultWriter<VideoFrame> | undefined;
+    let view: BrowserVideoTrack | undefined;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let latest: VideoFrame | null = null;
+    let writing = false;
+    let closed = false;
+    const ensureGenerator = () => {
+      if (!generator) {
+        generator = new MediaStreamTrackGenerator({ kind:'video' });
+        writer = generator.writable.getWriter();
+      }
+      return generator;
+    };
+    const consume = (frame: VideoFrame) => {
+      if (closed) { frame.close(); return; }
+      if (latest) latest.close();
+      latest = frame;
+      if (writing) return;
+      writing = true;
+      void (async () => {
+        while (latest && !closed) {
+          const next = latest; latest = null;
+          try { await writer?.write(next); } catch { /* dropped */ } finally { next.close(); }
+        }
+        writing = false;
+      })();
+    };
+    const render = (visible: boolean) => { void this.request('render',{streamId:stream,visible}).catch(() => {}); };
+    const unsubscribe = () => {
+      clearInterval(timer); timer = undefined;
+      this.frameConsumers.delete(stream);
+      if (latest) latest.close();
+      latest = null;
+    };
+    const track: FrameTrack = {
+      getPlaybackState: () => view?.getPlaybackState?.() ?? { attached:false, readyState:0, paused:true, frames:0, droppedFrames:0, trackState: closed ? 'ended' : 'live' },
+      getMediaStreamTrack() {
+        if (closed) throw new Error('原生视频轨已关闭。');
+        return ensureGenerator();
+      },
+      play: (container, options) => {
+        if (closed) return;
+        view ??= browserVideoTrack(ensureGenerator());
+        view.play(container, options);
+        this.frameConsumers.set(stream, consume);
+        render(true);
+        clearInterval(timer);
+        timer = setInterval(() => { if (this.frameConsumers.has(stream)) render(true); },1000);
+      },
+      stop: () => {
+        unsubscribe();
+        view?.stop();
+        render(false);
+      },
+      close: () => {
+        if (closed) return;
+        closed = true;
+        unsubscribe();
+        view?.stop(); view = undefined;
+        void writer?.abort().catch(() => {});
+        writer = undefined; generator = undefined;
+        render(false);
+      },
+    };
+    return track;
   }
   async capture(selection: CaptureSelection, preferences: Preferences): Promise<CapturedScreen> {
     const config = encoderConfig(preferences);
     const size = await this.request('prepare',{sourceId:selection.sourceId,width:config.width || 7680,height:config.height || 4320});
     let closed = false;
-    const preview = this.videoTrack('');
+    const preview = this.frameTrack('');
     const track: BrowserLocalVideoTrack = {
       trackMediaType:'video',get enabled() {return !closed;},
-      getMediaStreamTrack() { throw new Error('原生共享直接使用 SDK 视频源，不提供浏览器视频轨。'); },
-      play:preview.play,stop:preview.stop,close:() => { closed = true; preview.stop(); selections.delete(track); },
+      getMediaStreamTrack() { return preview.getMediaStreamTrack(); },
+      play:preview.play,stop:preview.stop,close:() => { closed = true; preview.close(); selections.delete(track); },
     };
     selections.set(track,selection);
     return {tracks:[track],width:number(size.width),height:number(size.height),hasAudio:preferences.audio && selection.audio !== 'none',surface:selection.kind === 'window' ? 'window' : 'monitor',onEnded() {},close:track.close};
@@ -131,9 +209,24 @@ export class VolcNativeAdapter implements RtcAdapter {
   async publish(tracks: LocalTrack[], preferences?: Preferences, size?: {width:number;height:number}) {
     const selection = selections.get(tracks[0]);
     if (!selection || !preferences || !size) throw new Error('原生共享来源已失效。');
-    await this.confirmed('publish',() => this.request('start',{sourceId:selection.sourceId,...size,fps:preferences.fps,bitrate:effectiveBitrate(preferences),audio:preferences.audio && selection.audio !== 'none',audioMode:selection.audio,filterVoice:!!selection.filterPid && selection.audio === 'system'}));
+    const audio = preferences.audio && selection.audio !== 'none';
+    const externalAudio = audio && (selection.audio === 'app' || (selection.audio === 'system' && !!selection.filterPid));
+    let audioStarted = false;
+    if (externalAudio) {
+      if (!desktopBridge?.startAudio) throw new Error('原生音频组件不可用，本次只能共享画面。');
+      const mode = selection.audio === 'app' ? 'include' : 'exclude';
+      const pid = selection.audio === 'app' ? selection.pid : selection.filterPid;
+      await desktopBridge.startAudio({ mode, pid: pid ?? null, native: true });
+      audioStarted = true;
+    }
+    try {
+      await this.confirmed('publish',() => this.request('start',{sourceId:selection.sourceId,...size,fps:preferences.fps,bitrate:effectiveBitrate(preferences),audio,audioMode:selection.audio,externalAudio}));
+    } catch (error) {
+      if (audioStarted) void desktopBridge?.stopAudio?.().catch(() => {});
+      throw error;
+    }
   }
-  async unpublish(_tracks: LocalTrack[]) { await this.request('stop'); this.local = {}; this.output.delete(''); }
+  async unpublish(_tracks: LocalTrack[]) { await desktopBridge?.stopAudio?.().catch(() => {}); await this.request('stop'); this.local = {}; this.output.delete(''); }
   async renewToken(token: string) { await this.request('token',{token}); }
   async subscribe(user: RtcRemoteUser, kind: MediaKind, signal?: AbortSignal) {
     const streamId = user.streamId, revision = user.publicationRevision;
@@ -157,24 +250,7 @@ export class VolcNativeAdapter implements RtcAdapter {
     if (user.streamId) this.output.delete(user.streamId);
     user.videoTrack = undefined; user.audioTrack = undefined;
   }
-  private videoTrack(streamId: string): BrowserVideoTrack {
-    let container: HTMLElement | undefined, observer: ResizeObserver | undefined, timer: ReturnType<typeof setInterval> | undefined;
-    const hide = () => { if (this.active) void this.request('render',{visible:false}).catch(() => {}); };
-    const stop = () => { clearInterval(timer); observer?.disconnect(); container = undefined; hide(); };
-    return {
-      play:(element,options) => {
-        stop(); container = element;
-        const update = () => {
-          if (!this.active || !container) return;
-          const rect = container.getBoundingClientRect(), scale = window.devicePixelRatio || 1;
-          const visible = container.isConnected && rect.width > 0 && rect.height > 0 && document.visibilityState === 'visible' && !document.querySelector('dialog[open], [role="dialog"]');
-          void this.request('render',{streamId,visible,x:Math.round(rect.x*scale),y:Math.round(rect.y*scale),width:Math.round(rect.width*scale),height:Math.round(rect.height*scale),fit:options?.fit !== 'cover'}).catch(() => {});
-        };
-        observer = new ResizeObserver(update); observer.observe(container); timer = setInterval(update,200); update();
-      },stop,
-      getPlaybackState:() => ({attached:!!container?.isConnected,readyState:(this.output.get(streamId) ?? 0) > 0 ? 4 : 0,paused:false,frames:(this.output.get(streamId) ?? 0) > 0 ? 1 : 0,droppedFrames:0,trackState:'live'}),
-    };
-  }
+  private videoTrack(streamId: string): BrowserVideoTrack { return this.frameTrack(streamId); }
   getRTCStats() { return {RTT:this.local.sendRttMs,SendBitrate:this.local.sendBitrate ?? 0,RecvBitrate:Object.values(this.remote).reduce((sum,value)=>sum+(value.receiveBitrate??0),0),Duration:0,UserCount:this.users.size+1}; }
   getNetworkQuality() { return {uplinkNetworkQuality:0,downlinkNetworkQuality:0}; }
   getLocalVideoStats() { return {...this.local}; }

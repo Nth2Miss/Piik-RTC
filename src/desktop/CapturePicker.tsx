@@ -52,6 +52,7 @@ function uniqueApps(apps: DesktopApp[]): DesktopApp[] {
 export function DesktopCapturePicker({ preferences, max1080 = false, onClose, onConfirm }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const confirmed = useRef(false);
+  const refreshing = useRef(false);
   const resolutions = useMemo(() => RESOLUTIONS.filter(option => !max1080 || (option.value !== '1440' && option.value !== 'native')), [max1080]);
   const [tab, setTab] = useState<Tab>('window');
   const [data, setData] = useState<DesktopSourceList | null>(null);
@@ -80,34 +81,45 @@ export function DesktopCapturePicker({ preferences, max1080 = false, onClose, on
   const voiceApps = useMemo(() => apps.filter(app => app.voice), [apps]);
   const otherApps = useMemo(() => apps.filter(app => !app.voice && app.windows > 0), [apps]);
 
-  async function refresh() {
+  async function refresh(initial = true) {
+    if (refreshing.current) return;
     const bridge = desktopBridge;
     if (!bridge) {
       setError('桌面采集组件不可用，请通过 Piik 桌面端打开。');
       setLoading(false);
       return;
     }
-    setLoading(true);
-    setError('');
+    refreshing.current = true;
+    if (initial) { setLoading(true); setError(''); }
     try {
       const next = await bridge.listSources();
       setData(next);
       setSelected(previous => {
-        const keep = (id?: string) => id && next.sources.some(source => source.id === id) ? id : undefined;
+        // Background refreshes keep the id so a minimized window becomes
+        // selected again once it is restored; explicit refreshes drop stale ids.
+        const keep = (id?: string) => id && (initial || next.sources.some(source => source.id === id)) ? id : initial ? undefined : id;
         return { window: keep(previous.window), screen: keep(previous.screen) };
       });
-      if (!next.sources.some(source => source.kind === 'window') && next.sources.some(source => source.kind === 'screen')) {
+      if (initial && !next.sources.some(source => source.kind === 'window') && next.sources.some(source => source.kind === 'screen')) {
         setTab('screen');
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (initial) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading(false);
+      refreshing.current = false;
+      if (initial) setLoading(false);
     }
   }
 
   useEffect(() => {
-    void refresh();
+    void refresh(true);
+  }, []);
+
+  // Window thumbnails and availability change while the dialog is open:
+  // refresh in the background so minimizing/restoring does not need a click.
+  useEffect(() => {
+    const timer = setInterval(() => { void refresh(false); }, 2000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -223,7 +235,7 @@ export function DesktopCapturePicker({ preferences, max1080 = false, onClose, on
 
         {loading ? <div className="dsc-loading"><Glyph name="loader" size={22}/><span>正在读取可共享的程序和屏幕…</span></div>
           : error ? <div className="dsc-loading dsc-error"><Glyph name="alert" size={22}/><span>{error}</span><button type="button" className="lr-btn is-dense" onClick={() => void refresh()}>重试</button></div>
-            : !sources.length ? <div className="dsc-empty"><Glyph name={tab === 'window' ? 'window' : 'display'} size={30}/><h3>{tab === 'window' ? '没有可共享的程序' : '没有检测到屏幕'}</h3><p>{tab === 'window' ? '最小化的窗口需要先恢复，再刷新列表。' : '请检查显示器连接后刷新。'}</p></div>
+            : !sources.length ? <div className="dsc-empty"><Glyph name={tab === 'window' ? 'window' : 'display'} size={30}/><h3>{tab === 'window' ? '没有可共享的程序' : '没有检测到屏幕'}</h3><p>{tab === 'window' ? '最小化的窗口需要先恢复，列表会自动更新。' : '请检查显示器连接后刷新。'}</p></div>
               : <div className="dsc-grid" role="listbox" aria-label={tab === 'window' ? '程序列表' : '屏幕列表'}>
                 {sources.map((source, index) => {
                   const selectedNow = source.id === currentId;

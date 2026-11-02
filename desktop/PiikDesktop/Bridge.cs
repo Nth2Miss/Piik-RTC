@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -37,13 +38,18 @@ namespace PiikDesktop
         private long _rawPosted;
         private long _rawDroppedPending;
         private long _rawDroppedBuffer;
+        private int _pendingNativeFrames;
+        private long _nativePosted;
+        private long _nativeDropped;
+        private long _nativeSeq;
         private System.Threading.Timer _rawStats;
 
-        public Bridge(IBridgeHost host, CoreWebView2 core, IntPtr videoParent)
+        public Bridge(IBridgeHost host, CoreWebView2 core)
         {
             _host = host;
             _core = core;
-            _nativeRtc = new NativeRtc(videoParent);
+            _nativeRtc = new NativeRtc();
+            _nativeRtc.Frame += PostNativeFrame;
             _uiContext = SynchronizationContext.Current;
             _rawStats = new System.Threading.Timer(LogRawStats, null, 2000, 2000);
         }
@@ -134,18 +140,33 @@ namespace PiikDesktop
             switch (type)
             {
                 case "nativeRtc":
-                    if (GetString(payload, "operation") == "prepare" || GetString(payload, "operation") == "start")
+                    var operation = GetString(payload, "operation");
+                    if (operation == "prepare" || operation == "start")
                     {
                         var selected = FindSource(GetString(payload, "sourceId"));
                         if (selected == null) throw new InvalidOperationException("共享来源已失效，请重新选择。");
                         _selected = selected;
+                    }
+                    if (operation == "start" && _selected != null && _selected.Kind == "window" && _selected.Hwnd != 0)
+                    {
+                        var previous = Win32.GetForegroundWindow();
+                        var source = new IntPtr(_selected.Hwnd);
+                        var minimized = Win32.IsIconic(source);
+                        var result = _nativeRtc.Command(payload, _selected);
+                        // The SDK's window capturer brings the source window to the
+                        // foreground; put focus/z-order back without touching capture.
+                        RestoreSharedWindow(previous, source, minimized);
+                        return result;
                     }
                     return _nativeRtc.Command(payload, _selected);
                 case "capabilities":
                     return SourceList.Capabilities();
 
                 case "listSources":
+                    var listWatch = Stopwatch.StartNew();
+                    Log.Write("listSources begin");
                     _lastList = await Task.Run(() => SourceList.List());
+                    Log.Write("listSources: " + _lastList.Sources.Count + " sources, " + listWatch.ElapsedMilliseconds + "ms");
                     return _lastList.ToJson();
 
                 case "selectSource":
@@ -211,6 +232,35 @@ namespace PiikDesktop
                 default:
                     throw new InvalidOperationException("未知的桌面请求：" + type);
             }
+        }
+
+        private async void RestoreSharedWindow(IntPtr previous, IntPtr source, bool minimized)
+        {
+            if (previous == IntPtr.Zero || previous == source) return;
+            for (var attempt = 0; attempt < 20; attempt++)
+            {
+                try { await Task.Delay(attempt == 0 ? 120 : 150); } catch { return; }
+                try
+                {
+                    if (minimized && attempt == 0) Win32.ShowWindow(source, Win32.SwMinimize);
+                    if (Win32.GetForegroundWindow() == source)
+                    {
+                        BringToForeground(previous);
+                        Win32.SetWindowPos(source, previous, 0, 0, 0, 0, Win32.SwpNomove | Win32.SwpNosize | Win32.SwpNoactivate);
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static void BringToForeground(IntPtr target)
+        {
+            var foreground = Win32.GetForegroundWindow();
+            var foregroundThread = Win32.GetWindowThreadProcessId(foreground, out _);
+            var currentThread = Win32.GetCurrentThreadId();
+            var attached = foregroundThread != 0 && foregroundThread != currentThread && Win32.AttachThreadInput(currentThread, foregroundThread, true);
+            try { Win32.SetForegroundWindow(target); }
+            finally { if (attached) Win32.AttachThreadInput(currentThread, foregroundThread, false); }
         }
 
         private DesktopSource FindSource(string id)
@@ -386,6 +436,79 @@ namespace PiikDesktop
             }
         }
 
+        private void PostNativeFrame(string stream, int width, int height, int rotation, byte[] data, long timestampUs)
+        {
+            if (data == null || data.Length == 0 || width <= 0 || height <= 0) return;
+            if (Interlocked.Increment(ref _pendingNativeFrames) > 2)
+            {
+                Interlocked.Decrement(ref _pendingNativeFrames);
+                Interlocked.Increment(ref _nativeDropped);
+                return;
+            }
+            if (_uiContext == null)
+            {
+                try { ShareNativeFrame(stream, width, height, data, timestampUs); }
+                finally { Interlocked.Decrement(ref _pendingNativeFrames); }
+                return;
+            }
+            _uiContext.Post(_ =>
+            {
+                try { ShareNativeFrame(stream, width, height, data, timestampUs); }
+                finally { Interlocked.Decrement(ref _pendingNativeFrames); }
+            }, null);
+        }
+
+        private void ShareNativeFrame(string stream, int width, int height, byte[] data, long timestampUs)
+        {
+            CoreWebView2SharedBuffer buffer = null;
+            var bufferId = 0;
+            lock (_bufferGate)
+            {
+                while (_freeBuffers.Count > 0)
+                {
+                    var candidate = _freeBuffers[_freeBuffers.Count - 1];
+                    _freeBuffers.RemoveAt(_freeBuffers.Count - 1);
+                    if (candidate == null) continue;
+                    if (candidate.Size >= (ulong)data.Length) { buffer = candidate; break; }
+                    try { candidate.Close(); } catch { }
+                }
+                if (buffer == null && _freeBuffers.Count + _inFlightBuffers.Count < 4)
+                {
+                    try { buffer = _core.Environment.CreateSharedBuffer((ulong)data.Length); }
+                    catch (Exception exception) { Log.Write("native frame buffer failed: " + exception.Message); return; }
+                }
+                if (buffer == null) { Interlocked.Increment(ref _nativeDropped); return; }
+                bufferId = ++_nextBufferId;
+                _inFlightBuffers[bufferId] = buffer;
+            }
+            try
+            {
+                using (var output = buffer.OpenStream()) output.Write(data, 0, data.Length);
+                var payload = new Dictionary<string, object>
+                {
+                    ["type"] = "native-frame",
+                    ["bufferId"] = bufferId,
+                    ["stream"] = stream,
+                    ["width"] = width,
+                    ["height"] = height,
+                    ["stride"] = width,
+                    ["seq"] = Interlocked.Increment(ref _nativeSeq),
+                    ["timestamp"] = timestampUs,
+                };
+                _core.PostSharedBufferToScript(buffer, CoreWebView2SharedBufferAccess.ReadOnly, SimpleJson.Stringify(payload));
+                Interlocked.Increment(ref _nativePosted);
+            }
+            catch (Exception exception)
+            {
+                Log.Write("native frame post failed: " + exception.Message);
+                lock (_bufferGate)
+                {
+                    _inFlightBuffers.Remove(bufferId);
+                    _freeBuffers.Add(buffer);
+                }
+            }
+        }
+
         private void LogRawStats(object state)
         {
             var posted = Interlocked.Exchange(ref _rawPosted, 0);
@@ -435,21 +558,31 @@ namespace PiikDesktop
         {
             var mode = GetString(payload, "mode");
             var pid = GetInt(payload, "pid");
+            var native = GetBool(payload, "native");
             if (mode != "system" && mode != "include" && mode != "exclude") throw new InvalidOperationException("未知的音频采集模式。");
             if (mode != "system" && pid <= 0) throw new InvalidOperationException("缺少要采集的程序进程号。");
             StopAudio();
+            AudioFormat format = null;
             _audio = new AudioProcessHost(
-                (data, length) => Post(new Dictionary<string, object>
+                (data, length) =>
                 {
-                    ["type"] = "audio-data",
-                    ["data"] = Convert.ToBase64String(data, 0, length),
-                }),
-                info => Post(new Dictionary<string, object>
+                    if (native) _nativeRtc.PushAudio(data, length, format);
+                    else Post(new Dictionary<string, object>
+                    {
+                        ["type"] = "audio-data",
+                        ["data"] = Convert.ToBase64String(data, 0, length),
+                    });
+                },
+                info =>
                 {
-                    ["type"] = "audio-ended",
-                    ["info"] = new Dictionary<string, object> { ["code"] = info.Code, ["message"] = info.Message },
-                }));
-            var format = _audio.Start(mode, pid);
+                    if (native) Log.Write("native audio ended: " + info.Code + " " + info.Message);
+                    else Post(new Dictionary<string, object>
+                    {
+                        ["type"] = "audio-ended",
+                        ["info"] = new Dictionary<string, object> { ["code"] = info.Code, ["message"] = info.Message },
+                    });
+                });
+            format = _audio.Start(mode, pid);
             return new Dictionary<string, object>
             {
                 ["ok"] = true,

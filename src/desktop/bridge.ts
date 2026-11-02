@@ -110,8 +110,9 @@ export interface DesktopBridge {
   stopVideo(): Promise<{ ok: boolean }>;
   onVideoFrame(handler: (frame: DesktopVideoFrame) => void): () => void;
   onVideoFrameRaw(handler: (frame: DesktopVideoFrameRaw) => void): () => void;
+  onNativeFrame?(handler: (frame: { frame: VideoFrame; stream: string; width: number; height: number; seq: number }) => void): () => void;
   onVideoEnded(handler: (info: { code: string; message: string }) => void): () => void;
-  startAudio(options: { mode: 'system' | 'include' | 'exclude'; pid?: number | null }): Promise<DesktopAudioStartResult>;
+  startAudio(options: { mode: 'system' | 'include' | 'exclude'; pid?: number | null; native?: boolean }): Promise<DesktopAudioStartResult>;
   stopAudio(): Promise<{ ok: boolean }>;
   clearSource(): Promise<{ ok: boolean }>;
   onAudioData(handler: (data: Uint8Array) => void): () => void;

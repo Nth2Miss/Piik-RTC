@@ -31,10 +31,11 @@ npm run desktop:dev
 
 ## 当前边界
 
-- 原生渲染使用 Windows 子窗口，弹窗打开时隐藏画面，关闭后恢复；缩放、全屏、DPI 和多显示器仍需实机验收。
-- 支持系统声音和按程序名采集程序声音。暂不支持系统声音排除指定语音软件；该模式会明确报错，不会悄悄改为采集全部声音。
+- 共享窗口时 SDK 采集器会把源窗口置顶；桌面端在启动后恢复原来的前台窗口和层级，另外对原生 SDK 的 USER32 导入表做了限定范围的 IAT 修补：启动窗口采集后的 3 秒内，只对当前共享源窗口拦截 `BringWindowToTop`/`ShowWindow`/`SetWindowPos` 的置顶/恢复调用，其他窗口和调用仍然走原函数。该 hook 依赖 SDK 版本，升级 SDK 后需重新回归；如果某些窗口采集后端必须保持置顶才能出画，需要关闭 hook 并退回到前台还原方案。
+- 本地预览和远端画面都通过 SDK 的 I420 视频帧回调，经 WebView2 共享缓冲区交给网页用普通 HTML video 渲染；不再创建原生视频子窗口，因此共享控制条和连接详情等弹窗可以正常覆盖画面。帧转发需要实机验证长时间 1080p60 的 CPU 占用和延迟。
+- 支持系统声音、按程序采集程序声音，以及共享系统声音时排除指定语音软件。过滤模式由桌面端 WASAPI 组件采集 PCM，再通过 `pushScreenAudioFrame` 送入原生 SDK；未开启过滤时仍使用 SDK 内部采集。
 - 原生统计只报告 SDK 提供的数据，不推断硬件编码状态。网页兼容新版原生 SDK 的主流发布事件，同时保留屏幕流订阅。
-- 原生组件包含官方包全部 x64 DLL，约111.7MiB；主程序约7.4MiB。分发时 exe 与 `native-volc` 目录必须一起复制。现有自动更新仅处理 exe，原生组件升级须手动同步；尚未接入按需下载或正式发布工作流。
+- 原生组件按官方“按需集成”清单只分发 `VolcEngineRTC.dll`、`RTCFFmpeg.dll`、`openh264-4.dll`、`libEGL.dll`、`libGLESv2.dll`、`pthreadVC2.dll`，约59.5MiB；主程序约7.4MiB。`effect.dll`、`bdaudioeffect-mt.dll` 及 VP8/FDK AAC/NICO/FFmpeg 音频扩展不再复制。分发时 exe 与 `native-volc` 目录必须一起复制。现有自动更新仅处理 exe，原生组件升级须手动同步；尚未接入按需下载或正式发布工作流。
 - 原生进房和视频发布等待 SDK 状态确认，失败或超时会释放资源，不使用 Web 首次低帧率重发逻辑。
 
 参考：[获取 SDK](https://docs.volcengine.com/docs/real-time-communication/rtc-get-sdk?lang=zh)、[PC 屏幕共享](https://docs.volcengine.com/docs/real-time-communication/pc-screen-sharing?lang=zh)、[Windows 升级指南](https://docs.volcengine.com/docs/real-time-communication/windows-client-upgrade?lang=zh)。

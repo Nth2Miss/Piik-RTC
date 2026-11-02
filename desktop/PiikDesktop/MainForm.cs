@@ -107,10 +107,12 @@ namespace PiikDesktop
 
             Load += async (_, __) => await InitializeAsync();
             FormClosing += OnFormClosing;
+            FormClosed += (_, __) => Log.Write("form closed");
         }
 
         private void OnFormClosing(object sender, FormClosingEventArgs e)
         {
+            Log.Write("form closing: " + e.CloseReason + " cancel=" + e.Cancel);
             if (_closing) return;
             SaveWindowBounds();
             if (e.CloseReason == CloseReason.WindowsShutDown || e.CloseReason == CloseReason.TaskManagerClosing)
@@ -302,7 +304,7 @@ namespace PiikDesktop
                 var shim = ResourceText("Piik.Shim.js");
                 if (!string.IsNullOrEmpty(shim)) await core.AddScriptToExecuteOnDocumentCreatedAsync(shim);
 
-                _bridge = new Bridge(this, core, _webView.Handle);
+                _bridge = new Bridge(this, core);
                 core.WebMessageReceived += (_, eventArgs) =>
                 {
                     var source = eventArgs.Source ?? "";

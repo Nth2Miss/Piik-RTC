@@ -7,6 +7,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace PiikDesktop
@@ -132,6 +133,7 @@ namespace PiikDesktop
 
         public static SourceListResult List()
         {
+            var watch = Stopwatch.StartNew();
             var result = new SourceListResult();
             result.Capabilities.Add("available", true);
             result.Capabilities.Add("processLoopback", ProcessLoopbackSupported);
@@ -140,10 +142,16 @@ namespace PiikDesktop
             result.Capabilities.Add("message", ProcessLoopbackSupported ? "" : "需要 Windows 10 2004（19041）或更高版本");
 
             var windows = EnumerateWindows();
+            Log.Write("enumerate windows: " + windows.Count + " in " + watch.ElapsedMilliseconds + "ms");
             foreach (var window in windows)
             {
+                // A window can be minimized between enumeration and thumbnail
+                // generation; never offer an uncapturable black card.
+                if (Win32.IsIconic(window.Hwnd) || !Win32.IsWindowVisible(window.Hwnd)) continue;
                 string thumbnail = "";
+                var windowWatch = Stopwatch.StartNew();
                 try { thumbnail = WindowThumbnail(window.Hwnd); } catch (Exception exception) { Log.Write("window thumbnail failed: " + exception.Message); }
+                if (windowWatch.ElapsedMilliseconds > 200) Log.Write("window thumbnail slow: " + windowWatch.ElapsedMilliseconds + "ms " + window.Title);
                 result.Sources.Add(new DesktopSource
                 {
                     Id = "window:" + window.Hwnd.ToInt64(),
@@ -241,6 +249,10 @@ namespace PiikDesktop
                 try
                 {
                     if (!Win32.IsWindowVisible(hwnd) || Win32.IsIconic(hwnd)) return true;
+                    // Resolve the owner first: GetWindowText blocks when the window
+                    // belongs to our own hung helper (the SDK's capture windows).
+                    Win32.GetWindowThreadProcessId(hwnd, out var pid);
+                    if (pid == 0 || pid == currentPid) return true;
                     var length = Win32.GetWindowTextLength(hwnd);
                     if (length <= 0) return true;
                     var builder = new StringBuilder(length + 1);
@@ -250,8 +262,6 @@ namespace PiikDesktop
                     var style = Win32.GetWindowLongPtr(hwnd, Win32.GwlExStyle).ToInt64();
                     if ((style & Win32.WsExToolWindow) != 0) return true;
                     if (Win32.DwmGetWindowAttribute(hwnd, Win32.DwmwaCloaked, out var cloaked, sizeof(int)) == 0 && cloaked != 0) return true;
-                    Win32.GetWindowThreadProcessId(hwnd, out var pid);
-                    if (pid == 0 || pid == currentPid) return true;
                     var (name, exe) = Describe((int)pid);
                     result.Add(new WindowEntry
                     {
@@ -276,20 +286,43 @@ namespace PiikDesktop
             {
                 if (ProcessCache.TryGetValue(pid, out var cached)) return cached;
             }
+            var watch = Stopwatch.StartNew();
             string name = "";
-            string exe = "";
             try
             {
-                using (var process = Process.GetProcessById(pid))
-                {
-                    name = process.ProcessName;
-                    try { exe = process.MainModule != null ? process.MainModule.FileName : ""; } catch { }
-                }
+                using (var process = Process.GetProcessById(pid)) name = process.ProcessName;
             }
             catch { }
+            // MainModule can block on game/anti-cheat processes. Only the icon
+            // needs the path, so never let it delay the source list.
+            var exe = name.Length > 0 ? ModulePath(pid) : "";
             var result = (name, exe);
             lock (ProcessCache) ProcessCache[pid] = result;
+            if (watch.ElapsedMilliseconds > 50) Log.Write("describe slow: " + watch.ElapsedMilliseconds + "ms pid=" + pid + " " + name);
             return result;
+        }
+
+        private static string ModulePath(int pid)
+        {
+            string path = "";
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var process = Process.GetProcessById(pid))
+                        path = process.MainModule != null ? process.MainModule.FileName : "";
+                }
+                catch { }
+            }) { IsBackground = true };
+            thread.Start();
+            if (!thread.Join(250)) { Log.Write("module path timeout: pid=" + pid); return ""; }
+            return path;
+        }
+
+        private static bool Responsive(IntPtr hwnd)
+        {
+            if (Win32.IsHungAppWindow(hwnd)) return false;
+            return Win32.SendMessageTimeout(hwnd, Win32.WmNull, IntPtr.Zero, IntPtr.Zero, Win32.SmtoAbortIfHung, 80, out _) != IntPtr.Zero;
         }
 
         private static string WindowThumbnail(IntPtr hwnd)
@@ -298,6 +331,9 @@ namespace PiikDesktop
             var width = rect.Width;
             var height = rect.Height;
             if (width <= 1 || height <= 1) return "";
+            // PrintWindow blocks until the target window answers WM_PRINT. Skip
+            // windows that are already hung so one window cannot stall the list.
+            if (!Responsive(hwnd)) return "";
             using (var source = new Bitmap(width, height, PixelFormat.Format32bppArgb))
             {
                 var captured = false;

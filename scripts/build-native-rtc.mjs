@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -33,8 +33,13 @@ run('cmd.exe',['/d','/c',batch]);
 // Keep the runtime beside each development/release host; vendor binaries stay ignored.
 const destinations = [path.join(root,'desktop','PiikDesktop','bin','Release','net48','native-volc'),path.join(root,'release','native-volc')];
 const runtime = path.join(sdk,'bin','x64');
-const dlls = readdirSync(runtime).filter(name => name.endsWith('.dll'));
+// Official modular package: only the Windows libraries required for screen
+// sharing, audio and H.264 are shipped. effect/beauty and optional codec
+// extensions are listed as removable by the SDK documentation.
+const required = new Set(['VolcEngineRTC.dll','libEGL.dll','libGLESv2.dll','openh264-4.dll','pthreadVC2.dll','RTCFFmpeg.dll']);
+const dlls = readdirSync(runtime).filter(name => name.endsWith('.dll') && required.has(name));
 for (const destination of destinations) {
+  rmSync(destination,{recursive:true,force:true});
   mkdirSync(destination,{recursive:true});
   copyFileSync(path.join(output,'PiikVolc.dll'),path.join(destination,'PiikVolc.dll'));
   for (const name of dlls) copyFileSync(path.join(runtime,name),path.join(destination,name));

@@ -1,7 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { VolcNativeAdapter } from '../../src/rtc/volc-native.ts';
 import { defaults } from '../../src/preferences.ts';
+
+// The native adapter talks to the desktop audio helper through the page bridge.
+// Install a minimal bridge before loading the module so publish can exercise
+// the external-audio path in Node.
+const previousWindow = globalThis.window;
+globalThis.window = { piikDesktop: {
+  isDesktop: true,
+  startAudio: async () => ({ ok:true, sampleRate:48000, channels:2, bits:16, encoding:'pcm_s16le', blockAlign:4 }),
+  stopAudio: async () => ({ ok:true }),
+  onNativeFrame: () => () => {},
+} };
+const { VolcNativeAdapter } = await import('../../src/rtc/volc-native.ts');
+globalThis.window = previousWindow;
 
 function fixture(t, overrides = {}) {
   const calls = [], events = [], queue = [];
@@ -24,12 +36,13 @@ test('原生共享使用真实 SDK 来源和16Mbps配置，不创建浏览器采
   const preferences = {...defaults,resolution:'1080',fps:60,bitrateMode:'auto'};
   const capture = await adapter.capture(selection,preferences);
   assert.equal(capture.width,1920); assert.equal(capture.height,1032);
-  assert.throws(()=>capture.tracks[0].getMediaStreamTrack(),/不提供浏览器视频轨/);
+  assert.equal(capture.tracks[0].trackMediaType,'video');
+  assert.equal(typeof capture.tracks[0].getMediaStreamTrack,'function');
   await adapter.publish(capture.tracks,preferences,capture);
   const start = calls.find(call=>call.operation==='start');
   assert.equal(start.bitrate,16000); assert.equal(start.fps,60);
   assert.equal(start.sourceId,selection.sourceId); assert.equal(start.audioMode,'app');
-  assert.equal(start.filterVoice,false);
+  assert.equal(start.audio,true); assert.equal(start.externalAudio,true);
   await adapter.unpublish(capture.tracks); capture.close();
   assert.equal(capture.tracks[0].enabled,false);
   assert.equal(calls.some(call=>call.operation==='stop'),true);

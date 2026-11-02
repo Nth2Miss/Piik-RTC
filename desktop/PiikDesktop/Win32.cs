@@ -10,6 +10,12 @@ namespace PiikDesktop
         public const long WsExToolWindow = 0x00000080;
         public const int DwmwaCloaked = 14;
         public const int PwRenderFullContent = 2;
+        public const int WmNull = 0x0000;
+        public const int SmtoAbortIfHung = 0x0002;
+        public const uint SwpNosize = 0x0001;
+        public const uint SwpNomove = 0x0002;
+        public const uint SwpNoactivate = 0x0010;
+        public const int SwMinimize = 6;
 
         public delegate bool EnumWindowsProc(IntPtr window, IntPtr lParam);
 
@@ -24,6 +30,30 @@ namespace PiikDesktop
 
         [DllImport("user32.dll")]
         public static extern bool IsIconic(IntPtr window);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsHungAppWindow(IntPtr window);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr SendMessageTimeout(IntPtr window, int message, IntPtr wParam, IntPtr lParam, int flags, uint timeout, out IntPtr result);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr window);
+
+        [DllImport("user32.dll")]
+        public static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindow(IntPtr window, int command);
+
+        [DllImport("user32.dll")]
+        public static extern bool AttachThreadInput(uint thread, uint attachTo, bool attach);
+
+        [DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern int GetWindowTextLength(IntPtr window);
