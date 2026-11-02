@@ -160,6 +160,7 @@ export function createRoomService() {
   let quotaWatchdogBusy = false;
   let viewerIntentRevision = 0;
   let viewerExplicitlyCleared = false;
+  let nativeEntryGate: ((provider: RtcProvider) => Promise<boolean>) | undefined;
   function members(): Participant[] {
     if (!joined || state.uid === undefined) return [];
     const known = new Map(participants.map(person => [person.uid, person]));
@@ -560,11 +561,17 @@ export function createRoomService() {
   }
   async function enter(room: Room) {
     if (!confirmed || (joined && state.room?.id === room.id)) return;
+    const provider = room.provider || 'agora';
+    if (nativeEntryGate) {
+      try { if (!(await nativeEntryGate(provider))) return; }
+      catch { /* the gate is optional; never block entry on it */ }
+      if (!confirmed) return;
+    }
     if (joined) await leave();
     viewerRecovery.reset();
     viewerExplicitlyCleared = false;
-    await client.setProvider(room.provider || 'agora');
-    if ((room.provider || 'agora') === 'agora') getAgoraSdk().onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
+    await client.setProvider(provider);
+    if (provider === 'agora') getAgoraSdk().onAutoplayFailed = () => { notify('点击页面可开启当前共享的声音。'); document.addEventListener('click', () => source.resumeAudio(), { once:true }); };
     mediaHistory.length = 0; playback = undefined;
     emit({ room });
     try {
@@ -793,6 +800,7 @@ export function createRoomService() {
       await refreshRooms();
     }),
     join:(room:Room) => run(() => enter(room)),
+    setNativeEntryGate(gate?: (provider: RtcProvider) => Promise<boolean>) { nativeEntryGate = gate; },
     joinInvite:(value:string) => run(async () => {
       const url = new URL(value), id = new URLSearchParams(url.hash.slice(1)).get('room');
       if (url.origin !== location.origin || !/^[a-f0-9]{12}$/.test(id || '')) throw new Error('请使用本站生成的完整邀请链接。');

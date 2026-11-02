@@ -13,8 +13,8 @@ import { applyTheme, currentTheme, subscribeTheme } from './vendor/piik/src/clie
 import { automaticBitrate, defaults, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import { inviteUrl, type ConnectionSnapshot, type RoomService, type RoomState } from './room-service';
 import { DesktopCapturePicker } from './desktop/CapturePicker.tsx';
-import { isDesktopApp, type CaptureSelection } from './desktop/bridge.ts';
-import { useNativeComponent } from './desktop/native-component.ts';
+import { isDesktopApp, desktopBridge, type CaptureSelection, type DesktopNativeComponentProgress, type DesktopNativeComponentStatus } from './desktop/bridge.ts';
+import { useNativeComponent, setNativeComponentStatus } from './desktop/native-component.ts';
 import { usernameError } from './username';
 import type { Room, RtcProvider } from './types';
 import { PlaybackSampler, formatFps } from './playback-stats';
@@ -171,7 +171,7 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
     : '准备下载…';
   const startShare = () => {
     if (!isDesktopApp) { void service.share(); return; }
-    if (native.showSharePrompt) { setNativeSharePrompt(true); return; }
+    if (native.needsInstall) { setNativeSharePrompt(true); return; }
     capture();
   };
   const installAndShare = async () => {
@@ -181,7 +181,6 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
     capture();
   };
   const shareWithoutInstall = () => {
-    native.skipShare();
     setNativeSharePrompt(false);
     capture();
   };
@@ -223,11 +222,6 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
     catch { /* picture-in-picture is unavailable in this browser */ }
   };
   return <><main className={`lr-room sw-room${wide ? ' is-wide' : ''}`}><div className="sw-room-heading"><div><h1>{state.room?.name}</h1><p>{state.room?.description || '每个人都可以分享，点击成员切换观看。'}</p></div><span className="sw-count">{state.members.length} 人在线 · {state.members.filter(person => person.sharing).length} 路共享</span></div>
-    {native.showBanner && !state.sharing && <div className="sw-native-banner" role="status">
-      <span className="sw-native-badge">推荐</span>
-      <div className="sw-native-copy"><strong>火山原生组件未安装</strong><span>安装后可改善首次共享帧率（约 22 MB）</span>{native.error && !native.installing && <small className="sw-native-error">{native.error}</small>}</div>
-      {native.installing ? <div className="sw-native-download"><div className="sw-native-progress"><span style={{ width:`${Math.max(0, Math.min(100, native.progress?.percent || 0))}%` }}/></div><small>{nativeProgressText}</small></div> : <div className="sw-native-actions"><Action icon="arrowDown" primary disabled={state.busy || state.connecting} onClick={() => void native.install()}>推荐安装</Action><Action icon="x" onClick={native.dismissBanner}>暂不</Action></div>}
-    </div>}
     <div className="lr-scene"><StageTv label="共享画面" live={!!state.video} indicator={<span className={`sw-tv-lamp${state.connected ? ' is-live' : ''}`} aria-label={state.connection}/>}>
       <VideoSurface state={state} paused={paused} service={service}/>{!state.video && <StageOverlay icon={state.connecting ? 'loader' : 'tv'} comic={state.connecting ? 'signal-connecting' : 'waiting-for-host'} waiting={state.connecting} message={state.connecting ? '正在连接媒体…' : selected ? `${selected.name} 暂未共享画面` : '等待大家分享画面'}/>}
       <div className="sw-playback"><span className="sw-watching">{state.video ? `${paused ? '已暂停' : '正在观看'} · ${selected?.name || '共享画面'}${state.selected === state.uid ? '（你）' : ''}` : '选择下方成员，切换共享画面'}</span><div className="sw-playback-tools">
@@ -248,7 +242,7 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
     <p className="sw-stage-caption">{state.caption}</p><div className="sw-roster"><Couch view="host" host={owner ? { key:String(owner.uid),name:owner.name,you:owner.uid === state.uid,selected:state.selected === owner.uid,onSelect:() => void service.select(owner.uid) } : undefined} entries={entries} selectedKey={state.selected === undefined ? undefined : String(state.selected)} onSelect={key => void service.select(Number(key))} footerAction={<><span className="lr-couch-count sw-total-count" aria-label={`房间成员 ${state.members.length}`}><Glyph name="users" size={14}/><b>{state.members.length}</b></span><button className="lr-btn is-dense is-quiet" onClick={members}><Glyph name="users" size={14}/><span className="lr-cap">房间成员</span></button></>}/></div></div>
     <div className="lr-deck"><Row><span className="sw-room-code"><Glyph name="tv"/><span>{state.room?.id.toUpperCase()}</span></span><NameTag name={state.name} identity={String(state.uid)}/><span className="lr-spacer"/><Action icon="gauge" onClick={connection}>连接详情</Action>{state.room?.isOwner && <Action icon="pencil" onClick={edit}>编辑房间</Action>}<details className="sw-invite"><summary>邀请链接</summary><input className="lr-invite-url" readOnly value={state.room ? inviteUrl(state.room) : ''} aria-label="房间邀请链接" onFocus={event => event.currentTarget.select()}/></details></Row></div>
   </main>
-  {nativeSharePrompt && <Modal title="安装火山原生组件" close={() => setNativeSharePrompt(false)}>
+  {nativeSharePrompt && <Modal title="安装火山原生组件" close={() => { if (!native.installing) setNativeSharePrompt(false); }}>
     <div className="sw-native-modal">
       <span className="sw-native-badge">推荐</span>
       <p>首次共享改用 WGC 原生采集，帧率和清晰度更稳定（约 22 MB）</p>
@@ -369,6 +363,48 @@ function RoomEditor({ room, state, service, close, busy }: { room?:Room; state:R
     <label>房间名称 {!room && <small>选填</small>}<span className="lr-input"><Glyph name="tv"/><input name="name" defaultValue={room?.name} placeholder={room ? '请输入房间名称' : `留空使用用户名：${state.name}`} required={!!room} maxLength={40} autoFocus/></span></label><label>房间描述 <small>选填</small><textarea name="description" defaultValue={room?.description} placeholder="正在分享什么，想一起做什么？" maxLength={160} rows={3}/></label>{!room && <fieldset className="sw-provider-list"><legend>RTC 服务商</legend>{providerKeys.filter(key => state.providers[key]).map(key => { const usage = status?.[key]; return <label key={key}><input type="radio" name="provider" checked={provider === key} onChange={() => setProvider(key)} disabled={!state.providers[key] || lowBalance(usage)}/><span className="sw-provider-content"><span className="sw-provider-heading"><strong>{providerNames[key]}{recommendedProviders.has(key) && <em className="sw-provider-badge">推荐</em>}</strong><small>{!state.providers[key] ? '未配置' : usage?.status === 'ok' ? `预计剩余 ${formatAmount(usage.remaining)} / ${formatAmount(usage.total)} ${usage.unit || '分钟'}${lowBalance(usage) ? ' · 达到 500 分钟保护线' : ''}` : statusError && !usage ? '查询失败' : usageMessage(usage)}</small></span><UsageProgress name={providerNames[key]} usage={usage || {status:'loading'}}/></span></label>; })}<p className="sw-settings-note">余量达到或低于 500 分钟时不可选择；同一房间的成员使用同一家服务商，创建后不可更改。</p></fieldset>}<p className="sw-settings-note">房间会出现在大厅，空置 15 分钟后自动关闭。</p><Action icon="arrowRight" primary type="submit" disabled={busy || (!room && (!state.providers[provider] || lowBalance(status?.[provider])))}>{room ? '保存修改' : '创建并进入'}</Action>
   </form></Modal>;
 }
+function NativeEntryPrompt({ onDone }: { onDone:(proceed:boolean) => void }) {
+  const [installing, setInstalling] = useState(false);
+  const [progress, setProgress] = useState<DesktopNativeComponentProgress>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    const unsubscribe = desktopBridge?.onNativeComponentProgress?.(setProgress);
+    return () => { unsubscribe?.(); };
+  }, []);
+  const progressText = progress?.phase === 'downloading' ? `正在下载 ${progress.percent}%`
+    : progress?.phase === 'verifying' ? '正在校验 SHA-256…'
+    : progress?.phase === 'extracting' ? '正在安装…'
+    : '准备下载…';
+  const install = async () => {
+    if (!desktopBridge?.nativeComponent) { onDone(true); return; }
+    setInstalling(true);
+    setError(undefined);
+    try {
+      const result = await desktopBridge.nativeComponent({ operation: 'install' });
+      if (!result.available) throw new Error('安装完成后未找到原生组件。');
+      setNativeComponentStatus(result);
+      onDone(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setInstalling(false);
+    }
+  };
+  return <Modal title="安装火山原生组件" close={() => { if (!installing) onDone(true); }}>
+    <div className="sw-native-gate">
+      <div className="sw-native-gate-head">
+        <span className="sw-native-gate-icon"><Glyph name="tv"/></span>
+        <div><span className="sw-native-badge">推荐</span><h3>火山原生组件未安装</h3></div>
+      </div>
+      <p>安装后可改善首次共享帧率（约 22 MB）。进入房间前安装只需一次。</p>
+      {installing && <div className="sw-native-download"><div className="sw-native-progress"><span style={{ width:`${Math.max(0, Math.min(100, progress?.percent || 0))}%` }}/></div><small>{progressText}</small></div>}
+      {error && <p className="sw-native-error">{error}</p>}
+    </div>
+    <footer className="sw-dialog-footer">
+      <Action icon="share" onClick={() => onDone(true)} disabled={installing}>暂不，直接进房</Action>
+      <Action icon="arrowDown" primary onClick={() => void install()} disabled={installing}>{installing ? '正在安装…' : '推荐安装'}</Action>
+    </footer>
+  </Modal>;
+}
 function App({ service }: { service:RoomService }) {
   const state = useSyncExternalStore(service.subscribe, service.getSnapshot);
   const [statusPage, setStatusPage] = useState(location.hash === '#status');
@@ -376,12 +412,36 @@ function App({ service }: { service:RoomService }) {
   const [dialog,setDialog] = useState<'create'|'edit'|'join'|'settings'|'help'|'members'|'connection'|'capture'|null>(null);
   const [removing,setRemoving] = useState<Room>();
   const [troubleshooting,setTroubleshooting] = useState(false);
+  const [entryStatus,setEntryStatus] = useState<DesktopNativeComponentStatus>();
+  const entryResolve = useRef<((proceed:boolean) => void) | null>(null);
   const close = () => { setDialog(null); setTroubleshooting(false); };
+  useEffect(() => {
+    service.setNativeEntryGate(async provider => {
+      if (!isDesktopApp || (provider !== 'volc' && provider !== 'volc2') || !desktopBridge?.nativeComponent) return true;
+      let status: DesktopNativeComponentStatus;
+      try { status = await desktopBridge.nativeComponent({ operation: 'status' }); }
+      catch { return true; }
+      setNativeComponentStatus(status);
+      if (!status.supported || status.available) return true;
+      return await new Promise<boolean>(resolve => {
+        entryResolve.current = resolve;
+        setEntryStatus(status);
+      });
+    });
+    return () => service.setNativeEntryGate(undefined);
+  }, [service]);
+  const finishEntry = (proceed:boolean) => {
+    const resolve = entryResolve.current;
+    entryResolve.current = null;
+    setEntryStatus(undefined);
+    resolve?.(proceed);
+  };
   useEffect(() => { document.body.dataset.view = state.view; },[state.view]);
   return <div className={`lr-app sw-app${state.view === 'room' ? ' is-room' : ''}`}><Header state={state} service={service} help={() => setDialog('help')}/>
     {statusPage ? <ServiceStatusPage providers={state.providers} ready={state.ready} room={state.view === 'room' ? state.room : undefined}/> : state.view === 'welcome' ? <Welcome state={state} service={service}/> : state.view === 'lobby' ? <Lobby state={state} service={service} create={() => setDialog('create')} join={() => setDialog('join')} remove={setRemoving}/> : <RoomPage state={state} service={service} settings={() => setDialog('settings')} edit={() => setDialog('edit')} members={() => setDialog('members')} connection={() => setDialog('connection')} capture={() => setDialog('capture')}/>}
     {state.notice && <div className={`lr-notice sw-notice ${state.notice.error ? 'is-bad' : 'is-good'}`} role={state.notice.error ? 'alert' : 'status'}><span className="lr-pill"><Glyph name={state.notice.error ? 'alert' : 'check'}/>{state.notice.message}</span><button className="lr-btn is-dense is-quiet" onClick={service.dismissNotice} aria-label="关闭通知"><Glyph name="x"/></button></div>}
     {state.budgetAlert && <Modal title="服务余量不足" close={service.dismissBudgetAlert}><p>{state.budgetAlert}</p><footer className="sw-dialog-footer"><Action icon="check" primary onClick={service.dismissBudgetAlert}>知道了</Action></footer></Modal>}
+    {entryStatus && <NativeEntryPrompt onDone={finishEntry}/>}
     {(dialog === 'create' || dialog === 'edit') && <RoomEditor key={dialog} room={dialog === 'edit' ? state.room : undefined} state={state} service={service} busy={state.busy} close={close}/>}
     {dialog === 'join' && <Modal title="进入朋友的房间" close={close}><form className="sw-form" onSubmit={async event => { event.preventDefault(); const form = new FormData(event.currentTarget); if (await service.joinInvite(String(form.get('invite')))) close(); }}><label>房间邀请链接<span className="lr-input"><Glyph name="link"/><input name="invite" type="url" placeholder="粘贴邀请链接" required autoFocus/></span></label><Action icon="arrowRight" primary type="submit" disabled={state.busy}>进入房间</Action></form></Modal>}
     {dialog === 'settings' && <Settings state={state} service={service} close={close}/>}

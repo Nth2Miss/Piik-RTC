@@ -1,6 +1,6 @@
 # Piik-RTC 桌面端
 
-本分支可选接入火山原生 RTC，详见[原生测试说明](native-rtc.md)。原生组件默认不随主程序分发，进入 `volc`/`volc2` 房间时可按需下载（约 22 MB）；下文单文件和 Web SDK 说明适用于未安装原生组件的普通模式。
+本分支可选接入火山原生 RTC，详见[原生测试说明](native-rtc.md)。原生组件默认不随主程序分发，进入 `volc`/`volc2` 房间前会弹窗询问是否按需下载（约 22 MB）；下文单文件和 Web SDK 说明适用于未安装原生组件的普通模式。
 
 桌面端是一个 **单文件、免安装** 的 Windows 程序（约 7.4 MB），不是网页套壳：
 
@@ -32,7 +32,7 @@
 - 更新会下载到当前 exe 所在目录，因此程序需要放在有写权限的位置；放在受保护目录时请手动下载替换。
 - 右键菜单中的“检查更新…”可以手动检查；设置环境变量 `PIIK_DISABLE_UPDATE=1` 可以跳过启动检查。
 - 由于文件名带版本号，更新后启动的是新文件，新版本启动后会删除旧版本文件。旧快捷方式可能需要重新指向新文件。
-- 火山原生组件不随 exe 自动更新；Windows 桌面端进入 `volc`/`volc2` 房间时会提示按需安装或沿用已安装版本，见 [native-rtc.md](native-rtc.md)。
+- 火山原生组件不随 exe 自动更新；Windows 桌面端进入 `volc`/`volc2` 房间前会弹窗询问，点击“开始共享”时如果仍未安装也会再次提示，见 [native-rtc.md](native-rtc.md)。
 
 ## 系统要求
 
@@ -137,7 +137,7 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 3. `dotnet build` 构建 C# 主机；Costura 把 WebView2 托管 DLL 嵌入 exe，音频组件作为资源嵌入。
 4. 输出 `release/Piik-RTC-v<版本>.exe`（约 7.4 MB）和 `release/version.json`。
 
-发布工作流会额外生成 `release/native-volc-v<版本>.zip`（约 22 MB），并把版本、大小和 SHA-256 写入 `version.json` 的 `native` 段；桌面端在火山房间内按需下载。
+发布工作流会额外生成 `release/native-volc-v<版本>.zip`（约 22 MB），并把版本、大小和 SHA-256 写入 `version.json` 的 `native` 段；桌面端进入火山房间前按需下载。
 
 首次运行会把音频组件释放到 `%TEMP%\PiikRTC\audio\PiikAudio.exe`；WebView2 用户数据在 `%LOCALAPPDATA%\PiikRTC\WebView2`。
 
