@@ -314,7 +314,8 @@ API int __cdecl piik_volc_start(int window, long long source, int x, int y, int 
   return result;
 }
 API int __cdecl piik_volc_push_video(const void* data, int stride, int width, int height, int64_t timestamp_us) {
-  if (!engine || !externalVideo || leaving || !data || width <= 0 || height <= 0 || stride < width * 4) return -1;
+  if (!engine || !externalVideo || leaving) return -1000;
+  if (!data || width <= 0 || height <= 0 || stride < width * 4) return -2;
   bytertc::VideoFrameData frame{};
   frame.buffer_type = bytertc::kVideoBufferTypeRawMemory;
   frame.pixel_format = bytertc::kVideoPixelFormatBGRA;

@@ -21,6 +21,7 @@ namespace PiikDesktop
         private bool _hooksLogged;
         private volatile bool _externalVideo;
         private int _videoPushErrors;
+        private int _videoTimestampWarnings;
         private FrameCallback _frameCallback;
         public event Action<string, int, int, int, byte[], long> Frame;
         private readonly object _audioGate = new object();
@@ -179,18 +180,29 @@ namespace PiikDesktop
             var stream = streamPtr == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(streamPtr) ?? "";
             Frame?.Invoke(stream, width, height, rotation, bytes, timestampUs);
         }
-        public void PushVideo(RawVideoFrame frame)
+        public int PushVideo(RawVideoFrame frame)
         {
-            if (!_joined || !_externalVideo || Volatile.Read(ref _leaving) != 0 || frame?.Data == null || frame.Length <= 0) return;
+            if (!_joined || !_externalVideo || Volatile.Read(ref _leaving) != 0 || frame?.Data == null || frame.Length <= 0) return -1000;
             var handle = GCHandle.Alloc(frame.Data, GCHandleType.Pinned);
             try
             {
                 var result = PushVideoNative(handle.AddrOfPinnedObject(), frame.Stride, frame.Width, frame.Height, frame.TimestampUs);
-                if (result < 0 && Interlocked.Increment(ref _videoPushErrors) == 1) Log.Write("native video push failed: " + result);
+                if (result == -202)
+                {
+                    // kReturnStatusVideoTimeStampWarning: the SDK accepted the
+                    // frame but the capture cadence differs from the push interval.
+                    if (Interlocked.Increment(ref _videoTimestampWarnings) == 1) Log.Write("native video timestamp warning: " + result);
+                }
+                else if (result < 0 && result != -1000)
+                {
+                    if (Interlocked.Increment(ref _videoPushErrors) == 1) Log.Write("native video push failed: " + result);
+                }
+                return result;
             }
             catch (Exception exception)
             {
                 if (Interlocked.Increment(ref _videoPushErrors) == 1) Log.Write("native video push failed: " + exception.Message);
+                return -1;
             }
             finally { handle.Free(); }
         }

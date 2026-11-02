@@ -43,6 +43,9 @@ namespace PiikDesktop
         private long _nativePosted;
         private long _nativeDropped;
         private long _nativeSeq;
+        private long _nativePushOk;
+        private long _nativePushWarn;
+        private long _nativePushError;
         private System.Threading.Timer _rawStats;
 
         public Bridge(IBridgeHost host, CoreWebView2 core)
@@ -402,8 +405,13 @@ namespace PiikDesktop
             if (frame == null || frame.Data == null) return;
             if (_nativeVideo)
             {
-                try { _nativeRtc.PushVideo(frame); }
+                int result;
+                try { result = _nativeRtc.PushVideo(frame); }
+                catch { result = -1; }
                 finally { frame.Release?.Invoke(); }
+                if (result == -202) Interlocked.Increment(ref _nativePushWarn);
+                else if (result < 0 && result != -1000) Interlocked.Increment(ref _nativePushError);
+                else if (result >= 0) Interlocked.Increment(ref _nativePushOk);
                 return;
             }
             if (Interlocked.Increment(ref _pendingRawFrames) > 2)
@@ -561,6 +569,11 @@ namespace PiikDesktop
 
         private void LogRawStats(object state)
         {
+            var nativeOk = Interlocked.Exchange(ref _nativePushOk, 0);
+            var nativeWarn = Interlocked.Exchange(ref _nativePushWarn, 0);
+            var nativeError = Interlocked.Exchange(ref _nativePushError, 0);
+            if (nativeOk + nativeWarn + nativeError > 0)
+                Log.Write($"NATIVE video push fps={nativeOk / 2.0:F1} warnings={nativeWarn / 2.0:F1} errors={nativeError / 2.0:F1}");
             var posted = Interlocked.Exchange(ref _rawPosted, 0);
             var pending = Interlocked.Exchange(ref _rawDroppedPending, 0);
             var buffer = Interlocked.Exchange(ref _rawDroppedBuffer, 0);
