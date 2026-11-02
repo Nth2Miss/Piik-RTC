@@ -14,7 +14,9 @@ namespace PiikDesktop
         public const int SmtoAbortIfHung = 0x0002;
         public const uint SwpNosize = 0x0001;
         public const uint SwpNomove = 0x0002;
+        public const uint SwpNozorder = 0x0004;
         public const uint SwpNoactivate = 0x0010;
+        public const uint SwpNoSendChanging = 0x0400;
         public const int SwMinimize = 6;
         public const int SwShowNoActivate = 4;
 

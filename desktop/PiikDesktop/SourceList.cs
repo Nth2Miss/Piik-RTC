@@ -376,17 +376,35 @@ namespace PiikDesktop
                 var height = Math.Max(2, normal.Bottom - normal.Top);
                 // Restore off-screen so the user never sees a row of minimized
                 // windows popping out while the picker collects thumbnails.
+                // WPF_RESTORETOMAXIMIZED would bring a maximized-then-minimized
+                // window back full-screen instead of the off-screen rect.
+                placement.Flags &= ~2;
                 placement.ShowCmd = Win32.SwShowNoActivate;
                 placement.NormalPosition.Left = -32000;
                 placement.NormalPosition.Top = -32000;
                 placement.NormalPosition.Right = -32000 + width;
                 placement.NormalPosition.Bottom = -32000 + height;
+                // Move while still minimized so a clamping app never paints at
+                // its normal position; the placement then restores off-screen.
+                Win32.SetWindowPos(hwnd, IntPtr.Zero, -32000, -32000, width, height,
+                    Win32.SwpNozorder | Win32.SwpNoactivate | Win32.SwpNoSendChanging);
                 try
                 {
                     if (SetWindowPlacement(hwnd, ref placement))
                     {
+                        // Chromium/Electron clamp WM_WINDOWPOSCHANGING back into
+                        // the work area; suppress that message while forcing the
+                        // window off-screen.
+                        Win32.SetWindowPos(hwnd, IntPtr.Zero, -32000, -32000, width, height,
+                            Win32.SwpNozorder | Win32.SwpNoactivate | Win32.SwpNoSendChanging);
                         Thread.Sleep(100);
-                        data = WindowThumbnail(hwnd);
+                        if (Win32.GetWindowRect(hwnd, out var current) && current.Left > -30000)
+                        {
+                            // The app refused to stay off-screen; skip the capture
+                            // instead of pulling it in front of the user.
+                            data = "";
+                        }
+                        else data = WindowThumbnail(hwnd);
                     }
                 }
                 catch { }
