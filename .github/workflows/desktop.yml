@@ -64,7 +64,7 @@ jobs:
       - name: Build desktop
         env:
           PIIK_DEFAULT_SERVER_URL: ${{ vars.PIIK_DEFAULT_SERVER_URL }}
-        run: npm run desktop:build
+        run: npm run desktop:build -- --native-rtc
 
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v7
@@ -72,6 +72,7 @@ jobs:
           name: Piik-RTC-desktop-v${{ needs.version.outputs.version }}
           path: |
             release/Piik-RTC-v${{ needs.version.outputs.version }}.exe
+            release/native-volc-v${{ needs.version.outputs.version }}.zip
             release/version.json
           if-no-files-found: error
 
@@ -82,6 +83,7 @@ jobs:
           name: Piik-RTC v${{ needs.version.outputs.version }}
           files: |
             release/Piik-RTC-v${{ needs.version.outputs.version }}.exe
+            release/native-volc-v${{ needs.version.outputs.version }}.zip
             release/version.json
           generate_release_notes: true
           fail_on_unmatched_files: true

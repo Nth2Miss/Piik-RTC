@@ -14,6 +14,7 @@ import { automaticBitrate, defaults, ZEGO_MAX_BITRATE, type Preferences } from '
 import { inviteUrl, type ConnectionSnapshot, type RoomService, type RoomState } from './room-service';
 import { DesktopCapturePicker } from './desktop/CapturePicker.tsx';
 import { isDesktopApp, type CaptureSelection } from './desktop/bridge.ts';
+import { useNativeComponent } from './desktop/native-component.ts';
 import { usernameError } from './username';
 import type { Room, RtcProvider } from './types';
 import { PlaybackSampler, formatFps } from './playback-stats';
@@ -162,6 +163,28 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
   const [fullscreenView, setFullscreenView] = useState(false);
   const [pipView, setPipView] = useState(false);
   const wide = state.preferences.wide;
+  const native = useNativeComponent(state.room?.provider, () => service.activateNativeRtc());
+  const [nativeSharePrompt, setNativeSharePrompt] = useState(false);
+  const nativeProgressText = native.progress?.phase === 'downloading' ? `正在下载 ${native.progress.percent}%`
+    : native.progress?.phase === 'verifying' ? '正在校验 SHA-256…'
+    : native.progress?.phase === 'extracting' ? '正在安装…'
+    : '准备下载…';
+  const startShare = () => {
+    if (!isDesktopApp) { void service.share(); return; }
+    if (native.showSharePrompt) { setNativeSharePrompt(true); return; }
+    capture();
+  };
+  const installAndShare = async () => {
+    if (!(await native.install())) return;
+    if (!service.getSnapshot().room) return;
+    setNativeSharePrompt(false);
+    capture();
+  };
+  const shareWithoutInstall = () => {
+    native.skipShare();
+    setNativeSharePrompt(false);
+    capture();
+  };
   useEffect(() => { setPaused(false); service.setPlaybackPaused(false); }, [state.video, service]);
   useEffect(() => {
     const syncFullscreen = () => setFullscreenView(!!document.fullscreenElement);
@@ -199,7 +222,12 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
     try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await video.requestPictureInPicture(); }
     catch { /* picture-in-picture is unavailable in this browser */ }
   };
-  return <main className={`lr-room sw-room${wide ? ' is-wide' : ''}`}><div className="sw-room-heading"><div><h1>{state.room?.name}</h1><p>{state.room?.description || '每个人都可以分享，点击成员切换观看。'}</p></div><span className="sw-count">{state.members.length} 人在线 · {state.members.filter(person => person.sharing).length} 路共享</span></div>
+  return <><main className={`lr-room sw-room${wide ? ' is-wide' : ''}`}><div className="sw-room-heading"><div><h1>{state.room?.name}</h1><p>{state.room?.description || '每个人都可以分享，点击成员切换观看。'}</p></div><span className="sw-count">{state.members.length} 人在线 · {state.members.filter(person => person.sharing).length} 路共享</span></div>
+    {native.showBanner && !state.sharing && <div className="sw-native-banner" role="status">
+      <span className="sw-native-badge">推荐</span>
+      <div className="sw-native-copy"><strong>火山原生组件未安装</strong><span>安装后可改善首次共享帧率（约 22 MB）</span>{native.error && !native.installing && <small className="sw-native-error">{native.error}</small>}</div>
+      {native.installing ? <div className="sw-native-download"><div className="sw-native-progress"><span style={{ width:`${Math.max(0, Math.min(100, native.progress?.percent || 0))}%` }}/></div><small>{nativeProgressText}</small></div> : <div className="sw-native-actions"><Action icon="arrowDown" primary disabled={state.busy || state.connecting} onClick={() => void native.install()}>推荐安装</Action><Action icon="x" onClick={native.dismissBanner}>暂不</Action></div>}
+    </div>}
     <div className="lr-scene"><StageTv label="共享画面" live={!!state.video} indicator={<span className={`sw-tv-lamp${state.connected ? ' is-live' : ''}`} aria-label={state.connection}/>}>
       <VideoSurface state={state} paused={paused} service={service}/>{!state.video && <StageOverlay icon={state.connecting ? 'loader' : 'tv'} comic={state.connecting ? 'signal-connecting' : 'waiting-for-host'} waiting={state.connecting} message={state.connecting ? '正在连接媒体…' : selected ? `${selected.name} 暂未共享画面` : '等待大家分享画面'}/>}
       <div className="sw-playback"><span className="sw-watching">{state.video ? `${paused ? '已暂停' : '正在观看'} · ${selected?.name || '共享画面'}${state.selected === state.uid ? '（你）' : ''}` : '选择下方成员，切换共享画面'}</span><div className="sw-playback-tools">
@@ -215,11 +243,23 @@ function RoomPage({ state, service, settings, edit, members, connection, capture
         <Btn icon={fullscreenView ? 'contract' : 'expand'} title={fullscreenView ? 'playback.exitFullscreen' : 'playback.fullscreen'} size="dense" quiet onClick={toggleFullscreen}/>
       </div></div>
     </StageTv><div className="lr-host-controls"><div className="lr-media-controls lr-host-share-controls"><div className="lr-host-action-dock">
-      {state.sharing ? <Btn icon="stop" tone="danger" title="host.stop" cap="host.stop" disabled={state.busy} onClick={() => void service.stop()}/> : <Btn icon="share" tone="primary" title="host.start" cap="host.start" busy={state.connecting} disabled={state.busy || state.connecting} onClick={() => { if (isDesktopApp) capture(); else void service.share(); }}/>}
+      {state.sharing ? <Btn icon="stop" tone="danger" title="host.stop" cap="host.stop" disabled={state.busy} onClick={() => void service.stop()}/> : <Btn icon="share" tone="primary" title="host.start" cap="host.start" busy={state.connecting} disabled={state.busy || state.connecting} onClick={startShare}/>}
     </div><div className="lr-host-tool-dock"><Btn icon="sliders" title="host.settings.button" cap="host.settings.button" onClick={settings}/><Btn icon="link" title="host.invite.copy" cap="host.invite.copy" onClick={() => void service.copyInvite()}/><Action icon="refresh" onClick={() => void service.refresh()} disabled={state.busy}>刷新</Action><Action icon="users" onClick={members}>成员</Action><Action icon="arrowLeft" onClick={() => void service.leave()} disabled={state.busy}>离开房间</Action></div></div></div>
     <p className="sw-stage-caption">{state.caption}</p><div className="sw-roster"><Couch view="host" host={owner ? { key:String(owner.uid),name:owner.name,you:owner.uid === state.uid,selected:state.selected === owner.uid,onSelect:() => void service.select(owner.uid) } : undefined} entries={entries} selectedKey={state.selected === undefined ? undefined : String(state.selected)} onSelect={key => void service.select(Number(key))} footerAction={<><span className="lr-couch-count sw-total-count" aria-label={`房间成员 ${state.members.length}`}><Glyph name="users" size={14}/><b>{state.members.length}</b></span><button className="lr-btn is-dense is-quiet" onClick={members}><Glyph name="users" size={14}/><span className="lr-cap">房间成员</span></button></>}/></div></div>
     <div className="lr-deck"><Row><span className="sw-room-code"><Glyph name="tv"/><span>{state.room?.id.toUpperCase()}</span></span><NameTag name={state.name} identity={String(state.uid)}/><span className="lr-spacer"/><Action icon="gauge" onClick={connection}>连接详情</Action>{state.room?.isOwner && <Action icon="pencil" onClick={edit}>编辑房间</Action>}<details className="sw-invite"><summary>邀请链接</summary><input className="lr-invite-url" readOnly value={state.room ? inviteUrl(state.room) : ''} aria-label="房间邀请链接" onFocus={event => event.currentTarget.select()}/></details></Row></div>
-  </main>;
+  </main>
+  {nativeSharePrompt && <Modal title="安装火山原生组件" close={() => setNativeSharePrompt(false)}>
+    <div className="sw-native-modal">
+      <span className="sw-native-badge">推荐</span>
+      <p>首次共享改用 WGC 原生采集，帧率和清晰度更稳定（约 22 MB）</p>
+      {native.installing && <div className="sw-native-download"><div className="sw-native-progress"><span style={{ width:`${Math.max(0, Math.min(100, native.progress?.percent || 0))}%` }}/></div><small>{nativeProgressText}</small></div>}
+      {native.error && <p className="sw-native-error">{native.error}</p>}
+    </div>
+    <footer className="sw-dialog-footer">
+      <Action icon="share" onClick={shareWithoutInstall} disabled={native.installing}>直接共享</Action>
+      <Action icon="arrowDown" primary onClick={() => void installAndShare()} disabled={native.installing || state.busy || state.connecting}>{native.installing ? '正在安装…' : '推荐安装并共享'}</Action>
+    </footer>
+  </Modal>}</>;
 }
 const qualityLabels = ['未知', '极佳', '优秀', '良好', '一般', '较差', '已断开'];
 const formatSize = (width: number, height: number) => width > 0 && height > 0 ? `${width}×${height}` : '—';
@@ -271,6 +311,21 @@ function ConnectionDetails({ state, service, close }: { state:RoomState; service
 function Choices<T extends string | number>({ label, options, value, onChange }: { label:string; options:[T,string][]; value:T; onChange:(value:T) => void }) {
   return <div className="lr-door-group"><strong className="lr-field-cap">{label}</strong><div className="lr-row-group" role="group" aria-label={label}>{options.map(([item,title]) => <Chip key={item} title={title} selected={value === item} onClick={() => onChange(item)}>{title}</Chip>)}</div></div>;
 }
+function NativeComponentSettings({ state, service }: { state:RoomState; service:RoomService }) {
+  const native = useNativeComponent(state.room?.provider, () => service.activateNativeRtc());
+  if (!native.enabled || native.status?.available || !native.status?.supported) return null;
+  const progressText = native.progress?.phase === 'downloading' ? `正在下载 ${native.progress.percent}%`
+    : native.progress?.phase === 'verifying' ? '正在校验 SHA-256…'
+    : native.progress?.phase === 'extracting' ? '正在安装…'
+    : '准备下载…';
+  return <div className="lr-door-group sw-native-settings">
+    <strong className="lr-field-cap">火山原生组件 <span className="sw-native-badge">推荐</span></strong>
+    <p className="sw-settings-note">安装后可改善首次共享帧率（约 22 MB）。</p>
+    {native.installing ? <div className="sw-native-download"><div className="sw-native-progress"><span style={{ width:`${Math.max(0, Math.min(100, native.progress?.percent || 0))}%` }}/></div><small>{progressText}</small></div>
+      : <Action icon="arrowDown" primary onClick={() => void native.install()} disabled={state.sharing || state.busy || state.connecting}>{state.sharing ? '停止共享后可安装' : '安装火山原生组件'}</Action>}
+    {native.error && <p className="sw-native-error">{native.error}</p>}
+  </div>;
+}
 function Settings({ state, service, close }: { state:RoomState; service:RoomService; close:() => void }) {
   const isZego = state.room?.provider === 'zego';
   const [draft, setDraft] = useState<Preferences>(() => {
@@ -300,7 +355,7 @@ function Settings({ state, service, close }: { state:RoomState; service:RoomServ
     <SwitchItem checked={draft.includeSelf} onChange={includeSelf => change({ includeSelf })} label="允许选择本站标签页" icon="window"/>
     <div className="lr-door-group"><strong className="lr-field-cap">观看音量</strong><label className="lr-slider"><Glyph name="speaker"/><input type="range" min={0} max={100} value={draft.volume} onChange={event => change({ volume:Number(event.target.value) },true)} aria-label="观看音量"/><output>{draft.volume}%</output></label></div>
     <SwitchItem checked={draft.muted} onChange={muted => change({ muted },true)} label="静音观看" icon="speakerOff"/>
-  </>}/><footer className="sw-dialog-footer"><Action icon="refresh" onClick={() => { setDraft({ ...defaults }); service.savePreferences({ ...state.preferences,volume:defaults.volume,muted:defaults.muted,fit:defaults.fit }); }}>恢复默认</Action><span className="sw-settings-note">共享参数在下次开始共享时生效。</span><Action icon="check" primary onClick={() => { service.savePreferences(draft); close(); }}>保存设置</Action></footer></Modal>;
+  </>}/><NativeComponentSettings state={state} service={service}/><footer className="sw-dialog-footer"><Action icon="refresh" onClick={() => { setDraft({ ...defaults }); service.savePreferences({ ...state.preferences,volume:defaults.volume,muted:defaults.muted,fit:defaults.fit }); }}>恢复默认</Action><span className="sw-settings-note">共享参数在下次开始共享时生效。</span><Action icon="check" primary onClick={() => { service.savePreferences(draft); close(); }}>保存设置</Action></footer></Modal>;
 }
 function RoomEditor({ room, state, service, close, busy }: { room?:Room; state:RoomState; service:RoomService; close:() => void; busy:boolean }) {
   const { data:status, error:statusError } = useServiceStatus(!room);

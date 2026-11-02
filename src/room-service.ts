@@ -601,6 +601,22 @@ export function createRoomService() {
     const id = new URLSearchParams(location.hash.slice(1)).get('room');
     if (id && /^[a-f0-9]{12}$/.test(id)) await enter(await api<Room>(`/api/rooms/${id}`));
   }
+  async function activateNativeRtc() {
+    const provider = state.room?.provider;
+    if (!joined || (provider !== 'volc' && provider !== 'volc2')) throw new Error('当前房间未使用火山引擎。');
+    if (state.sharing) throw new Error('请先停止共享，再启用原生组件。');
+    const pending = mediaConnecting;
+    if (pending) { try { await pending; } catch { /* connection failure is handled by connectMedia */ } }
+    if (!joined || state.room?.provider !== provider) throw new Error('房间已退出，原生组件将在下次进房时生效。');
+    if (state.sharing) throw new Error('请先停止共享，再启用原生组件。');
+    if (state.connecting) throw new Error('媒体正在连接，请稍后再启用原生组件。');
+    const wasConnected = state.connected;
+    if (wasConnected) await disconnectMedia();
+    await client.setProvider(provider);
+    if (!client.nativeRtc) throw new Error('原生组件安装后仍不可用，请重启桌面端后重试。');
+    if (wasConnected) await connectMedia();
+    emit({ caption:'火山原生组件已启用，下次共享将使用原生采集。' });
+  }
   async function share(selection?: CaptureSelection) {
     lastCapturePipeline = undefined;
     if (!selection && (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia)) throw new Error('请在桌面 Chrome / Edge 中，通过 localhost 或 HTTPS 共享。');
@@ -794,6 +810,7 @@ export function createRoomService() {
     leave:() => run(async () => { await leave(); await refreshRooms(); }),
     changeName:() => run(async () => { if (joined) await leave(); confirmed = false; emit({ view:'welcome' }); }),
     share:(selection?: CaptureSelection) => run(() => share(selection)), stop:() => run(() => stop()),
+    activateNativeRtc:() => run(() => activateNativeRtc()),
     select:(uid?: UID) => {
       viewerIntentRevision++; viewerRecovery.cancel();
       viewerExplicitlyCleared = uid === undefined && (state.room?.provider === 'volc' || state.room?.provider === 'volc2');

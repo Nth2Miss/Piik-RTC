@@ -12,11 +12,11 @@ npm run desktop:native:build
 npm run desktop:dev
 ```
 
-需要可复制的完整测试包时运行 `npm run desktop:build:native`，生成 `release/Piik-RTC-native-v<版本>.zip`，包含 exe 和原生组件目录。此命令只生成本地文件，不触发线上发布。
+需要可复制的完整测试包时运行 `npm run desktop:build:native`，生成 `release/Piik-RTC-native-v<版本>.zip`（exe 和原生组件目录）以及 `release/native-volc-v<版本>.zip`（约22MiB）。此命令只生成本地文件，不触发线上发布。
 
 `desktop:native:build` 从官方地址下载 SDK，校验固定 SHA-256 后编译 C ABI 桥接。第三方 SDK 和编译产物缓存在忽略目录中，不进入 Git。原生运行库复制到桌面构建目录和 `release/native-volc/`。
 
-桌面端检测到 `native-volc/PiikVolc.dll` 时，`volc` 和 `volc2` 使用原生 RTC；没有该目录的桌面端及浏览器继续使用 Web SDK。声网、即构保持原实现。两个火山应用继续使用各自服务端返回的 AppID/Token 和独立额度，AppKey 保留在服务端。
+桌面端优先使用程序目录的 `native-volc/PiikVolc.dll`；没有随包分发时，可在火山房间内按需安装到 `%LOCALAPPDATA%\PiikRTC\native-volc\<版本>`。检测到组件后，`volc` 和 `volc2` 使用原生 RTC；未安装、安装失败或用户选择“暂不”时继续使用 Web SDK。声网、即构保持原实现。两个火山应用继续使用各自服务端返回的 AppID/Token 和独立额度，AppKey 保留在服务端。
 
 必须同时使用本分支网页资源；仅更新 exe、仍连接旧版网页，无法启用原生适配层。开发命令打开 `http://localhost:3000`，Pad 需连接同一服务的可访问地址。
 
@@ -37,7 +37,9 @@ npm run desktop:dev
 - 最小化窗口会出现在来源列表中并标记“已最小化”。开始共享时桌面端用 `SW_SHOWNOACTIVATE` 临时恢复窗口，把它放到 Piik 窗口后面（不抢前台），再交给 WGC 采集；停止共享后重新最小化。WGC 本身采不到最小化窗口，这一层是 host 侧 workaround；全屏游戏或恢复后不重绘的窗口仍可能黑屏。
 - 支持系统声音、按程序采集程序声音，以及共享系统声音时排除指定语音软件。过滤模式由桌面端 WASAPI 组件采集 PCM，再通过 `pushScreenAudioFrame` 送入原生 SDK；未开启过滤时仍使用 SDK 内部采集。
 - 原生统计只报告 SDK 提供的数据，不推断硬件编码状态。网页兼容新版原生 SDK 的主流发布事件，同时保留屏幕流订阅。
-- 原生组件按官方“按需集成”清单只分发 `VolcEngineRTC.dll`、`RTCFFmpeg.dll`、`openh264-4.dll`、`libEGL.dll`、`libGLESv2.dll`、`pthreadVC2.dll`，约59.5MiB；主程序约7.4MiB。`effect.dll`、`bdaudioeffect-mt.dll` 及 VP8/FDK AAC/NICO/FFmpeg 音频扩展不再复制。分发时 exe 与 `native-volc` 目录必须一起复制。现有自动更新仅处理 exe，原生组件升级须手动同步；尚未接入按需下载或正式发布工作流。
+- 原生组件按官方“按需集成”清单只分发 `VolcEngineRTC.dll`、`RTCFFmpeg.dll`、`openh264-4.dll`、`libEGL.dll`、`libGLESv2.dll`、`pthreadVC2.dll`，未压缩约59.5MiB，压缩包约22MiB；主程序约7.4MiB。`effect.dll`、`bdaudioeffect-mt.dll` 及 VP8/FDK AAC/NICO/FFmpeg 音频扩展不再复制。
+- 桌面端只在 Windows + `volc`/`volc2` 房间显示推荐安装提示。安装流程从 GitHub Release 读取带 `native` 段的 `version.json`，优先通过 `v4.gh-proxy.org` 加速下载，失败回退 GitHub 直连；按清单中的大小和 SHA-256 校验后解压到 `%LOCALAPPDATA%\PiikRTC\native-volc\<版本>`，并清理旧版本。每版本记住“暂不”；安装失败或跳过时回退 Web SDK。共享设置中也保留手动安装入口。安装完成时如果媒体已经连接，会断开并重新连接一次以启用原生适配层。exe 同目录存在 `version.json` 和对应组件包时，会优先使用本地文件，便于本地构建测试。
+- 发布工作流同时上传 exe、`native-volc-v<版本>.zip` 和 `version.json`。`npm run desktop:build:native` 仍生成 exe + `native-volc` 的离线包。自动更新只替换 exe；原生组件按上述按需流程独立安装和更新。
 - 原生进房和视频发布等待 SDK 状态确认，失败或超时会释放资源，不使用 Web 首次低帧率重发逻辑。
 
 参考：[获取 SDK](https://docs.volcengine.com/docs/real-time-communication/rtc-get-sdk?lang=zh)、[PC 屏幕共享](https://docs.volcengine.com/docs/real-time-communication/pc-screen-sharing?lang=zh)、[Windows 升级指南](https://docs.volcengine.com/docs/real-time-communication/windows-client-upgrade?lang=zh)。

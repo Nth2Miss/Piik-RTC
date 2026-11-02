@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync,
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
+const componentVersion = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const version = '3.60.107.2100';
 const download = 'https://portal.volccdn.com/obj/volcfe/cloud-universal-doc/upload_ea0375d4e0a1dba99e6c4adc082da1b3.zip';
 const sha256 = '3c90a7cb0e57a4e6b1f5eda3fa8dbfdb190635360a149cb739098713623463d7';
@@ -43,7 +44,15 @@ for (const destination of destinations) {
   mkdirSync(destination,{recursive:true});
   copyFileSync(path.join(output,'PiikVolc.dll'),path.join(destination,'PiikVolc.dll'));
   for (const name of dlls) copyFileSync(path.join(runtime,name),path.join(destination,name));
-  writeFileSync(path.join(destination,'version.json'),JSON.stringify({provider:'volc',sdk:version,archiveSha256:sha256})+'\n');
+  writeFileSync(path.join(destination,'version.json'),JSON.stringify({provider:'volc',version:componentVersion,sdk:version,archiveSha256:sha256})+'\n');
 }
 const bytes = dlls.reduce((sum,name)=>sum+statSync(path.join(runtime,name)).size,statSync(path.join(output,'PiikVolc.dll')).size);
-console.log(`火山原生测试组件 ${version}：${(bytes/1024/1024).toFixed(1)} MiB。桌面 exe 与 native-volc 目录必须一起分发。`);
+const componentZip = path.join(root,'release',`native-volc-v${componentVersion}.zip`);
+const componentMeta = path.join(root,'release',`native-volc-v${componentVersion}.json`);
+rmSync(componentZip,{force:true});
+run('powershell.exe',['-NoProfile','-Command',`Compress-Archive -Path '${path.join(root,'release','native-volc').replaceAll("'","''")}\\*' -DestinationPath '${componentZip.replaceAll("'","''")}' -Force`]);
+const componentSha = createHash('sha256').update(readFileSync(componentZip)).digest('hex');
+const metadata = {version:componentVersion,sdk:version,file:path.basename(componentZip),size:statSync(componentZip).size,sha256:componentSha};
+writeFileSync(componentMeta,JSON.stringify(metadata)+'\n');
+console.log(`火山原生测试组件 ${version}：${(bytes/1024/1024).toFixed(1)} MiB。`);
+console.log(`火山原生组件包：${componentZip}（${(metadata.size/1024/1024).toFixed(1)} MiB）`);

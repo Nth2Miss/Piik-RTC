@@ -144,6 +144,24 @@ namespace PiikRTC
         {
             switch (type)
             {
+                case "nativeComponent":
+                {
+                    var nativeOperation = GetString(payload, "operation");
+                    if (nativeOperation == "status") return (await NativeComponent.GetStatusAsync(GetBool(payload, "force"))).ToJson();
+                    if (nativeOperation == "install")
+                    {
+                        var progress = new Progress<NativeComponentProgress>(value => Post(new Dictionary<string, object>
+                        {
+                            ["type"] = "native-component-progress",
+                            ["phase"] = value.Phase,
+                            ["percent"] = value.Percent,
+                            ["received"] = value.Received,
+                            ["total"] = value.Total,
+                        }));
+                        return (await NativeComponent.InstallAsync(progress, CancellationToken.None)).ToJson();
+                    }
+                    throw new InvalidOperationException("未知的原生组件操作：" + nativeOperation);
+                }
                 case "nativeRtc":
                     var operation = GetString(payload, "operation");
                     if (operation == "prepare" || operation == "start")

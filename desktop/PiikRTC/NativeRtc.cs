@@ -31,15 +31,15 @@ namespace PiikRTC
         private int _audioChannels;
         private int _audioPushed;
         private int _audioPushErrors;
-        private static readonly string DirectoryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "native-volc");
-        public static bool Available => File.Exists(Path.Combine(DirectoryPath, "PiikVolc.dll"));
+        public static bool Available => NativeComponent.ResolveDirectory() != null;
         public NativeRtc() { }
 
         private static void Load()
         {
             if (_library != IntPtr.Zero) return;
-            if (!Available) throw new InvalidOperationException("未安装火山原生测试组件，请运行 npm run desktop:native:build。");
-            _library = LoadLibraryEx(Path.Combine(DirectoryPath, "PiikVolc.dll"), IntPtr.Zero, 8);
+            var directory = NativeComponent.ResolveDirectory();
+            if (directory == null) throw new InvalidOperationException("火山原生组件未安装，请先在房间内安装。");
+            _library = LoadLibraryEx(Path.Combine(directory, "PiikVolc.dll"), IntPtr.Zero, 8);
             if (_library == IntPtr.Zero) throw new InvalidOperationException("火山原生组件加载失败，Windows 错误码：" + Marshal.GetLastWin32Error());
         }
         private static object Ok(int result)

@@ -416,7 +416,7 @@ namespace PiikRTC
             if (!values.Any(item => string.Equals(item, value, StringComparison.OrdinalIgnoreCase))) values.Add(value);
         }
 
-        private static string ProxyUrl(string url)
+        internal static string ProxyUrl(string url)
         {
             if (string.IsNullOrWhiteSpace(url)) return url;
             if (IsMirrorUrl(url)) return url;

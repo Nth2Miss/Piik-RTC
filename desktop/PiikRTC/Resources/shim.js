@@ -8,6 +8,7 @@
   var videoFrames = new Set();
   var rawVideoFrames = new Set();
   var nativeVideoFrames = new Set();
+  var nativeComponentProgress = new Set();
   var nativeTimestamp = 0;
   var videoEnded = new Set();
 
@@ -53,7 +54,7 @@
         if (!pending.has(id)) return;
         pending.delete(id);
         reject(new Error('本地桌面服务响应超时。'));
-      }, type === 'listSources' ? 30000 : 15000);
+      }, type === 'listSources' ? 30000 : type === 'nativeComponent' ? 600000 : 15000);
     });
   }
 
@@ -80,6 +81,13 @@
       });
     } else if (message.type === 'video-ended') {
       emit(videoEnded, message.info || {});
+    } else if (message.type === 'native-component-progress') {
+      emit(nativeComponentProgress, {
+        phase: message.phase,
+        percent: message.percent,
+        received: message.received,
+        total: message.total,
+      });
     }
   });
 
@@ -136,6 +144,7 @@
     captureMode: 'webview2',
     platform: 'win32',
     nativeRtc: function (options) { return request('nativeRtc', options); },
+    nativeComponent: function (options) { return request('nativeComponent', options); },
     capabilities: function () { return request('capabilities'); },
     listSources: function () { return request('listSources'); },
     selectSource: function (id) { return request('selectSource', { id: id }); },
@@ -145,6 +154,7 @@
     onVideoFrame: subscribe(videoFrames),
     onVideoFrameRaw: subscribe(rawVideoFrames),
     onNativeFrame: subscribe(nativeVideoFrames),
+    onNativeComponentProgress: subscribe(nativeComponentProgress),
     onVideoEnded: subscribe(videoEnded),
     startAudio: function (options) { return request('startAudio', options); },
     stopAudio: function () { return request('stopAudio'); },

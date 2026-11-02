@@ -99,8 +99,29 @@ export interface DesktopVideoStartResult {
   message?: string;
 }
 
+export interface DesktopNativeComponentStatus {
+  supported: boolean;
+  available: boolean;
+  bundled: boolean;
+  updateAvailable: boolean;
+  installedVersion: string;
+  latestVersion: string;
+  sdk: string;
+  directory: string;
+  size: number;
+  error: string;
+}
+
+export interface DesktopNativeComponentProgress {
+  phase: 'downloading' | 'verifying' | 'extracting' | 'done' | string;
+  percent: number;
+  received: number;
+  total: number;
+}
+
 export interface DesktopBridge {
   nativeRtc?(options: Record<string, unknown>): Promise<Record<string, unknown>>;
+  nativeComponent?(options: { operation: 'status' | 'install'; force?: boolean }): Promise<DesktopNativeComponentStatus>;
   isDesktop: true;
   captureMode?: 'webview2';
   platform: string;
@@ -112,6 +133,7 @@ export interface DesktopBridge {
   onVideoFrame(handler: (frame: DesktopVideoFrame) => void): () => void;
   onVideoFrameRaw(handler: (frame: DesktopVideoFrameRaw) => void): () => void;
   onNativeFrame?(handler: (frame: { frame: VideoFrame; stream: string; width: number; height: number; seq: number }) => void): () => void;
+  onNativeComponentProgress?(handler: (progress: DesktopNativeComponentProgress) => void): () => void;
   onVideoEnded(handler: (info: { code: string; message: string }) => void): () => void;
   startAudio(options: { mode: 'system' | 'include' | 'exclude'; pid?: number | null; native?: boolean }): Promise<DesktopAudioStartResult>;
   stopAudio(): Promise<{ ok: boolean }>;

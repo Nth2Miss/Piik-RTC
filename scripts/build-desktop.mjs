@@ -103,11 +103,36 @@ mkdirSync(release, { recursive: true });
 const target = path.join(release, packageVersion ? `Piik-RTC-v${packageVersion}.exe` : 'Piik-RTC.exe');
 writeFileSync(target, readFileSync(hostExe));
 const manifest = path.join(release, 'version.json');
-writeFileSync(manifest, JSON.stringify({ version: packageVersion, exe: path.basename(target) }) + '\n');
+const writeManifest = native => writeFileSync(manifest, JSON.stringify({
+  version: packageVersion,
+  exe: path.basename(target),
+  ...(native ? { native } : {}),
+}) + '\n');
+writeManifest();
 console.log(`单文件桌面端：${target}（${(statSync(target).size / 1024 / 1024).toFixed(2)} MB）`);
 console.log(`版本清单：${manifest}`);
 if (process.argv.includes('--native-rtc')) {
   run(process.execPath, [path.join(root, 'scripts', 'build-native-rtc.mjs')]);
+  const generated = path.join(release, `native-volc-v${packageVersion}.json`);
+  if (!existsSync(generated)) {
+    console.error('原生组件包清单没有生成：' + generated);
+    process.exit(1);
+  }
+}
+const nativeMeta = path.join(release, `native-volc-v${packageVersion}.json`);
+const nativeZip = path.join(release, `native-volc-v${packageVersion}.zip`);
+if (existsSync(nativeMeta) && existsSync(nativeZip)) {
+  const native = JSON.parse(readFileSync(nativeMeta, 'utf8'));
+  writeManifest({
+    version: native.version,
+    sdk: native.sdk,
+    file: native.file,
+    size: native.size,
+    sha256: native.sha256,
+    url: `https://github.com/Nth2Miss/Piik-RTC/releases/download/v${native.version}/${native.file}`,
+  });
+}
+if (process.argv.includes('--native-rtc')) {
   const archive = path.join(release, `Piik-RTC-native-v${packageVersion}.zip`);
   const quote = value => "'" + value.replaceAll("'", "''") + "'";
   run('powershell.exe', ['-NoProfile', '-Command', `Compress-Archive -LiteralPath ${quote(target)},${quote(path.join(release, 'native-volc'))} -DestinationPath ${quote(archive)} -Force`]);
