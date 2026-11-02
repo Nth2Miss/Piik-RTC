@@ -16,6 +16,7 @@ namespace PiikDesktop
         public const uint SwpNomove = 0x0002;
         public const uint SwpNoactivate = 0x0010;
         public const int SwMinimize = 6;
+        public const int SwShowNoActivate = 4;
 
         public delegate bool EnumWindowsProc(IntPtr window, IntPtr lParam);
 
@@ -54,6 +55,9 @@ namespace PiikDesktop
 
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmFlush();
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern int GetWindowTextLength(IntPtr window);

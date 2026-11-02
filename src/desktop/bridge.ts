@@ -17,6 +17,7 @@ export interface DesktopSource {
   pid: number | null;
   appName: string | null;
   voice: boolean;
+  minimized?: boolean;
 }
 
 export interface DesktopApp {

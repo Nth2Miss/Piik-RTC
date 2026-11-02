@@ -281,7 +281,17 @@ namespace PiikDesktop
                 return screens[source.ScreenIndex].Bounds;
             }
             var window = new IntPtr(source.Hwnd);
-            if (!Win32.IsWindowVisible(window) || Win32.IsIconic(window)) throw new InvalidOperationException("共享窗口已最小化或不可见，请恢复窗口后重试。");
+            if (!Win32.IsWindowVisible(window)) throw new InvalidOperationException("共享窗口已不可见，请重新选择。");
+            if (Win32.IsIconic(window))
+            {
+                var placement = new WindowPlacement { Length = Marshal.SizeOf(typeof(WindowPlacement)) };
+                if (GetWindowPlacement(window, ref placement))
+                {
+                    var normal = placement.NormalPosition;
+                    if (normal.Right > normal.Left && normal.Bottom > normal.Top)
+                        return System.Drawing.Rectangle.FromLTRB(normal.Left, normal.Top, normal.Right, normal.Bottom);
+                }
+            }
             if (!GetWindowRect(window, out var rect) || rect.Right <= rect.Left || rect.Bottom <= rect.Top) throw new InvalidOperationException("共享窗口已关闭。");
             return System.Drawing.Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
         }
@@ -316,6 +326,16 @@ namespace PiikDesktop
             }
         }
         [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
+        [StructLayout(LayoutKind.Sequential)] private struct WindowPlacement
+        {
+            public int Length;
+            public int Flags;
+            public int ShowCmd;
+            public System.Drawing.Point MinPosition;
+            public System.Drawing.Point MaxPosition;
+            public Rect NormalPosition;
+        }
+        [DllImport("user32.dll")] private static extern bool GetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr LoadLibraryEx(string file, IntPtr reserved, uint flags);
         [DllImport("PiikVolc.dll", EntryPoint = "piik_volc_join", CallingConvention = CallingConvention.Cdecl)] private static extern int Join(string app, string room, string token, string uid);

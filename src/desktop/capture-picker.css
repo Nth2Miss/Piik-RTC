@@ -91,6 +91,7 @@
 .dsc-name { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; padding: 0 2px; font-size: 12px; }
 .dsc-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dsc-app-icon { flex: none; width: 16px; height: 16px; object-fit: contain; }
+.dsc-minimized { flex: none; padding: 1px 6px; border-radius: 999px; color: var(--live, #29cca3); background: rgba(41, 204, 163, 0.14); font-size: 10px; line-height: 16px; }
 .dsc-side {
   display: flex;
   flex-direction: column;

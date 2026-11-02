@@ -34,7 +34,7 @@ npm run desktop:dev
 - 原生视频默认使用桌面端 WGC 采集（`WgcCapture`，BGRA），通过 `pushExternalVideoFrame` 送入火山 SDK 编码和发布，屏幕与窗口走同一条采集链路；WGC 不可用或启动失败时自动回退到 SDK 内部采集。设置环境变量 `PIIK_NATIVE_INTERNAL=1` 可强制回退到 SDK 内部采集，用于对比和回滚。WGC 路径不经过 SDK 的窗口采集器，因此不会把源窗口置顶。
 - 回退到 SDK 内部采集时，窗口采集器仍可能置顶源窗口；桌面端会恢复原来的前台窗口和层级，并对 SDK 的 USER32 导入表做限定范围的 IAT 修补：启动窗口采集后的 3 秒内，只对当前共享源窗口拦截 `BringWindowToTop`/`ShowWindow`/`SetWindowPos` 的置顶/恢复调用。该 hook 依赖 SDK 版本，升级 SDK 后需重新回归。
 - 本地预览和远端画面都通过 SDK 的 I420 视频帧回调，经 WebView2 共享缓冲区交给网页用普通 HTML video 渲染；不再创建原生视频子窗口，因此共享控制条和连接详情等弹窗可以正常覆盖画面。WGC 外部视频的 CPU 占用、首帧时间和本地预览（外部帧进入本地 sink）尚未做真实设备验收。
-- 最小化窗口仍不会进入来源列表：WGC 本身采不到真正最小化的窗口，后续若要像 Oopz 一样支持，需要再实现“屏幕外恢复/隐藏缩略图 host”这一层。
+- 最小化窗口会出现在来源列表中并标记“已最小化”。开始共享时桌面端用 `SW_SHOWNOACTIVATE` 临时恢复窗口，把它放到 Piik 窗口后面（不抢前台），再交给 WGC 采集；停止共享后重新最小化。WGC 本身采不到最小化窗口，这一层是 host 侧 workaround；全屏游戏或恢复后不重绘的窗口仍可能黑屏。
 - 支持系统声音、按程序采集程序声音，以及共享系统声音时排除指定语音软件。过滤模式由桌面端 WASAPI 组件采集 PCM，再通过 `pushScreenAudioFrame` 送入原生 SDK；未开启过滤时仍使用 SDK 内部采集。
 - 原生统计只报告 SDK 提供的数据，不推断硬件编码状态。网页兼容新版原生 SDK 的主流发布事件，同时保留屏幕流订阅。
 - 原生组件按官方“按需集成”清单只分发 `VolcEngineRTC.dll`、`RTCFFmpeg.dll`、`openh264-4.dll`、`libEGL.dll`、`libGLESv2.dll`、`pthreadVC2.dll`，约59.5MiB；主程序约7.4MiB。`effect.dll`、`bdaudioeffect-mt.dll` 及 VP8/FDK AAC/NICO/FFmpeg 音频扩展不再复制。分发时 exe 与 `native-volc` 目录必须一起复制。现有自动更新仅处理 exe，原生组件升级须手动同步；尚未接入按需下载或正式发布工作流。

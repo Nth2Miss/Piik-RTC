@@ -25,6 +25,7 @@ namespace PiikDesktop
         private readonly SynchronizationContext _uiContext;
         private SourceListResult _lastList;
         private DesktopSource _selected;
+        private IntPtr _minimizedWindow;
         private bool _setupMode;
         private IVideoCapture _video;
         private string _videoMode;
@@ -335,6 +336,7 @@ namespace PiikDesktop
             var push = GetBool(payload, "push");
             StopVideo();
             _nativeVideo = push;
+            PrepareMinimizedWindow();
 
             var wantRaw = GetBool(payload, "raw")
                 && width > 0 && height > 0
@@ -599,6 +601,29 @@ namespace PiikDesktop
             }
         }
 
+        private void PrepareMinimizedWindow()
+        {
+            if (_selected == null || _selected.Kind != "window" || _selected.Hwnd == 0) return;
+            var window = new IntPtr(_selected.Hwnd);
+            if (!Win32.IsIconic(window)) return;
+            var previous = Win32.GetForegroundWindow();
+            // WGC cannot capture a minimized window. Restore it without taking
+            // focus and keep it behind the Piik window so DWM still composes it.
+            Win32.ShowWindow(window, Win32.SwShowNoActivate);
+            if (previous != IntPtr.Zero && previous != window)
+                Win32.SetWindowPos(window, previous, 0, 0, 0, 0, Win32.SwpNomove | Win32.SwpNosize | Win32.SwpNoactivate);
+            try { Win32.DwmFlush(); } catch { }
+            _minimizedWindow = window;
+        }
+
+        private void RestoreMinimizedWindow()
+        {
+            if (_minimizedWindow == IntPtr.Zero) return;
+            var window = _minimizedWindow;
+            _minimizedWindow = IntPtr.Zero;
+            try { if (!Win32.IsIconic(window)) Win32.ShowWindow(window, Win32.SwMinimize); } catch { }
+        }
+
         private void StopVideo()
         {
             _nativeVideo = false;
@@ -607,6 +632,7 @@ namespace PiikDesktop
             _videoMode = null;
             if (video != null) { try { video.Stop(); } catch { } }
             DisposeSharedBuffers();
+            RestoreMinimizedWindow();
         }
 
         private void DisposeSharedBuffers()

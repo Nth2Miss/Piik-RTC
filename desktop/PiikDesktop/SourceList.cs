@@ -24,6 +24,7 @@ namespace PiikDesktop
         public int Pid;
         public string AppName = "";
         public bool Voice;
+        public bool Minimized;
         public int ScreenIndex = -1;
 
         public Dictionary<string, object> ToJson()
@@ -40,6 +41,7 @@ namespace PiikDesktop
                 ["pid"] = Pid <= 0 ? (object)null : Pid,
                 ["appName"] = string.IsNullOrEmpty(AppName) ? null : AppName,
                 ["voice"] = Voice,
+                ["minimized"] = Minimized,
             };
         }
     }
@@ -145,13 +147,17 @@ namespace PiikDesktop
             Log.Write("enumerate windows: " + windows.Count + " in " + watch.ElapsedMilliseconds + "ms");
             foreach (var window in windows)
             {
-                // A window can be minimized between enumeration and thumbnail
-                // generation; never offer an uncapturable black card.
-                if (Win32.IsIconic(window.Hwnd) || !Win32.IsWindowVisible(window.Hwnd)) continue;
+                // Keep minimized windows: the host restores them without
+                // activation before WGC capture.
+                if (!Win32.IsWindowVisible(window.Hwnd)) continue;
+                var minimized = Win32.IsIconic(window.Hwnd);
                 string thumbnail = "";
                 var windowWatch = Stopwatch.StartNew();
-                try { thumbnail = WindowThumbnail(window.Hwnd); } catch (Exception exception) { Log.Write("window thumbnail failed: " + exception.Message); }
-                if (windowWatch.ElapsedMilliseconds > 200) Log.Write("window thumbnail slow: " + windowWatch.ElapsedMilliseconds + "ms " + window.Title);
+                if (!minimized)
+                {
+                    try { thumbnail = WindowThumbnail(window.Hwnd); } catch (Exception exception) { Log.Write("window thumbnail failed: " + exception.Message); }
+                    if (windowWatch.ElapsedMilliseconds > 200) Log.Write("window thumbnail slow: " + windowWatch.ElapsedMilliseconds + "ms " + window.Title);
+                }
                 result.Sources.Add(new DesktopSource
                 {
                     Id = "window:" + window.Hwnd.ToInt64(),
@@ -163,6 +169,7 @@ namespace PiikDesktop
                     Pid = window.Pid,
                     AppName = window.Name,
                     Voice = window.Voice,
+                    Minimized = minimized,
                 });
             }
 
@@ -248,7 +255,7 @@ namespace PiikDesktop
             {
                 try
                 {
-                    if (!Win32.IsWindowVisible(hwnd) || Win32.IsIconic(hwnd)) return true;
+                    if (!Win32.IsWindowVisible(hwnd)) return true;
                     // Resolve the owner first: GetWindowText blocks when the window
                     // belongs to our own hung helper (the SDK's capture windows).
                     Win32.GetWindowThreadProcessId(hwnd, out var pid);
@@ -332,8 +339,8 @@ namespace PiikDesktop
             var height = rect.Height;
             if (width <= 1 || height <= 1) return "";
             // PrintWindow blocks until the target window answers WM_PRINT. Skip
-            // windows that are already hung so one window cannot stall the list.
-            if (!Responsive(hwnd)) return "";
+            // minimized or hung windows so one window cannot stall the list.
+            if (Win32.IsIconic(hwnd) || !Responsive(hwnd)) return "";
             using (var source = new Bitmap(width, height, PixelFormat.Format32bppArgb))
             {
                 var captured = false;

@@ -235,7 +235,7 @@ export function DesktopCapturePicker({ preferences, max1080 = false, onClose, on
 
         {loading ? <div className="dsc-loading"><Glyph name="loader" size={22}/><span>正在读取可共享的程序和屏幕…</span></div>
           : error ? <div className="dsc-loading dsc-error"><Glyph name="alert" size={22}/><span>{error}</span><button type="button" className="lr-btn is-dense" onClick={() => void refresh()}>重试</button></div>
-            : !sources.length ? <div className="dsc-empty"><Glyph name={tab === 'window' ? 'window' : 'display'} size={30}/><h3>{tab === 'window' ? '没有可共享的程序' : '没有检测到屏幕'}</h3><p>{tab === 'window' ? '最小化的窗口需要先恢复，列表会自动更新。' : '请检查显示器连接后刷新。'}</p></div>
+            : !sources.length ? <div className="dsc-empty"><Glyph name={tab === 'window' ? 'window' : 'display'} size={30}/><h3>{tab === 'window' ? '没有可共享的程序' : '没有检测到屏幕'}</h3><p>{tab === 'window' ? '最小化的窗口也可以共享：开始时会临时恢复，但不会抢前台。' : '请检查显示器连接后刷新。'}</p></div>
               : <div className="dsc-grid" role="listbox" aria-label={tab === 'window' ? '程序列表' : '屏幕列表'}>
                 {sources.map((source, index) => {
                   const selectedNow = source.id === currentId;
@@ -253,7 +253,7 @@ export function DesktopCapturePicker({ preferences, max1080 = false, onClose, on
                         ? <img src={source.thumbnail} alt="" draggable={false}/>
                         : <span className="dsc-thumb-empty"><Glyph name={source.kind === 'screen' ? 'display' : 'window'} size={28}/></span>}
                     </span>
-                    <span className="dsc-name">{source.icon && <img className="dsc-app-icon" src={source.icon} alt=""/>}<span title={title}>{title}</span></span>
+                    <span className="dsc-name">{source.icon && <img className="dsc-app-icon" src={source.icon} alt=""/>}<span title={title}>{title}</span>{source.minimized && <small className="dsc-minimized">已最小化</small>}</span>
                   </button>;
                 })}
               </div>}
