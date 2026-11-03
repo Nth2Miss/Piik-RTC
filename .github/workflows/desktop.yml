@@ -18,28 +18,14 @@ permissions:
   contents: write
 
 jobs:
-  version:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - name: Validate release version
-        id: version
-        env:
-          PIIK_RELEASE_VERSION: ${{ inputs.version }}
-        run: node scripts/desktop-version.mjs
   checks:
-    needs: version
     uses: ./.github/workflows/checks.yml
+
   build:
-    needs: [version, checks]
     runs-on: windows-latest
     timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -48,15 +34,39 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
+
+      - name: Validate release version
+        id: version
+        env:
+          PIIK_RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/desktop-version.mjs
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 9.0.x
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('desktop/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Cache audio helper
+        id: audio-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            desktop/bin/PiikAudio.exe
+            desktop/PiikRTC/Resources/PiikAudio.exe.gz
+          key: piik-audio-${{ runner.os }}-${{ hashFiles('desktop/native/PiikAudio/**/*.cs', 'desktop/native/PiikAudio/*.csproj', 'scripts/build-desktop.mjs') }}-net9-v1
+
+      - name: Cache Volc native SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/volc-native/volc-native-sdk.zip
+          key: volc-native-${{ runner.os }}-${{ hashFiles('scripts/build-native-rtc.mjs') }}
 
       - name: Test update integrity
         run: dotnet run --project desktop/tests/UpdateIntegrity.Tests.csproj --configuration Release
@@ -64,26 +74,39 @@ jobs:
       - name: Build desktop
         env:
           PIIK_DEFAULT_SERVER_URL: ${{ vars.PIIK_DEFAULT_SERVER_URL }}
+          PIIK_SKIP_AUDIO_BUILD: ${{ steps.audio-cache.outputs.cache-hit == 'true' && '1' || '0' }}
         run: npm run desktop:build -- --native-rtc
 
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Piik-RTC-desktop-v${{ needs.version.outputs.version }}
+          name: Piik-RTC-desktop-v${{ steps.version.outputs.version }}
           path: |
-            release/Piik-RTC-v${{ needs.version.outputs.version }}.exe
-            release/native-volc-v${{ needs.version.outputs.version }}.zip
+            release/Piik-RTC-v${{ steps.version.outputs.version }}.exe
+            release/native-volc-v${{ steps.version.outputs.version }}.zip
             release/version.json
           if-no-files-found: error
+          compression-level: 0
+
+  release:
+    needs: [checks, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download desktop artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: Piik-RTC-desktop-v${{ needs.build.outputs.version }}
+          path: release
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.version.outputs.version }}
-          name: Piik-RTC v${{ needs.version.outputs.version }}
+          tag_name: v${{ needs.build.outputs.version }}
+          name: Piik-RTC v${{ needs.build.outputs.version }}
           files: |
-            release/Piik-RTC-v${{ needs.version.outputs.version }}.exe
-            release/native-volc-v${{ needs.version.outputs.version }}.zip
+            release/Piik-RTC-v${{ needs.build.outputs.version }}.exe
+            release/native-volc-v${{ needs.build.outputs.version }}.zip
             release/version.json
           generate_release_notes: true
           fail_on_unmatched_files: true

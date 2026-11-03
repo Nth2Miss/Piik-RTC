@@ -8,8 +8,9 @@ const componentVersion = JSON.parse(readFileSync(path.join(root, 'package.json')
 const version = '3.60.107.2100';
 const download = 'https://portal.volccdn.com/obj/volcfe/cloud-universal-doc/upload_ea0375d4e0a1dba99e6c4adc082da1b3.zip';
 const sha256 = '3c90a7cb0e57a4e6b1f5eda3fa8dbfdb190635360a149cb739098713623463d7';
-const archive = path.join(root,'node_modules','volc-native-sdk.zip');
-const extracted = path.join(root,'node_modules','volc-native-sdk');
+const cache = path.join(root, '.cache', 'volc-native');
+const archive = path.join(cache, 'volc-native-sdk.zip');
+const extracted = path.join(cache, 'volc-native-sdk');
 const sdk = path.join(extracted,`VolcEngineRTC_Windows_${version}`,'VolcEngineRTC');
 const output = path.join(root,'desktop','native','PiikVolc','bin');
 function run(command,args) {
@@ -18,8 +19,11 @@ function run(command,args) {
   if (result.status !== 0) throw new Error(`${command} 执行失败（${result.status}）。`);
 }
 if (process.platform !== 'win32') throw new Error('原生 RTC 桥接需要 Windows 与 Visual Studio C++ Build Tools。');
+const archiveSha = () => createHash('sha256').update(readFileSync(archive)).digest('hex');
+mkdirSync(cache,{recursive:true});
+if (existsSync(archive) && archiveSha() !== sha256) rmSync(archive,{force:true});
 if (!existsSync(archive)) run('curl.exe',['--fail','--location','--max-time','180',download,'--output',archive]);
-if (createHash('sha256').update(readFileSync(archive)).digest('hex') !== sha256) throw new Error('火山 SDK 压缩包摘要不匹配，请删除缓存包后重新下载。');
+if (archiveSha() !== sha256) throw new Error('火山 SDK 压缩包摘要不匹配，请删除缓存包后重新下载。');
 if (!existsSync(path.join(sdk,'include','bytertc_engine.h'))) run('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath '${archive.replaceAll("'","''")}' -DestinationPath '${extracted.replaceAll("'","''")}' -Force`]);
 const vswhere = path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)','Microsoft Visual Studio','Installer','vswhere.exe');
 const found = spawnSync(vswhere,['-latest','-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64','-find','VC\\Auxiliary\\Build\\vcvars64.bat'],{encoding:'utf8',windowsHide:true});

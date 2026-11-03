@@ -64,29 +64,34 @@ if (!embeddedServer && process.env.npm_lifecycle_event === 'desktop:build:embed'
   process.exit(1);
 }
 
-rmSync(helperOutput, { recursive: true, force: true });
-mkdirSync(helperOutput, { recursive: true });
-run('dotnet', [
-  'publish', helperProject,
-  '-c', 'Release',
-  '-r', 'win-x64',
-  '--self-contained', 'true',
-  '-p:PublishSingleFile=true',
-  '-p:PublishTrimmed=true',
-  '-p:TrimMode=partial',
-  '-p:DebugType=None',
-  '-p:DebugSymbols=false',
-  '-o', helperOutput,
-]);
-if (!existsSync(helperExe)) {
-  console.error('音频组件没有生成：' + helperExe);
-  process.exit(1);
-}
+const cachedAudio = process.env.PIIK_SKIP_AUDIO_BUILD === '1' && existsSync(helperExe) && existsSync(resource);
+if (cachedAudio) {
+  console.log('音频组件：使用缓存');
+} else {
+  rmSync(helperOutput, { recursive: true, force: true });
+  mkdirSync(helperOutput, { recursive: true });
+  run('dotnet', [
+    'publish', helperProject,
+    '-c', 'Release',
+    '-r', 'win-x64',
+    '--self-contained', 'true',
+    '-p:PublishSingleFile=true',
+    '-p:PublishTrimmed=true',
+    '-p:TrimMode=partial',
+    '-p:DebugType=None',
+    '-p:DebugSymbols=false',
+    '-o', helperOutput,
+  ]);
+  if (!existsSync(helperExe)) {
+    console.error('音频组件没有生成：' + helperExe);
+    process.exit(1);
+  }
 
-const raw = readFileSync(helperExe);
-const compressed = gzipSync(raw, { level: 9 });
-writeFileSync(resource, compressed);
-console.log(`音频组件：${(raw.length / 1024 / 1024).toFixed(1)} MB -> 压缩 ${(compressed.length / 1024 / 1024).toFixed(1)} MB`);
+  const raw = readFileSync(helperExe);
+  const compressed = gzipSync(raw, { level: 9 });
+  writeFileSync(resource, compressed);
+  console.log(`音频组件：${(raw.length / 1024 / 1024).toFixed(1)} MB -> 压缩 ${(compressed.length / 1024 / 1024).toFixed(1)} MB`);
+}
 
 run('dotnet', ['build', hostProject, '-c', 'Release', '-v', 'minimal',
   ...(packageVersion ? ['-p:Version=' + packageVersion] : []),
@@ -132,7 +137,7 @@ if (existsSync(nativeMeta) && existsSync(nativeZip)) {
     url: `https://github.com/Nth2Miss/Piik-RTC/releases/download/v${native.version}/${native.file}`,
   });
 }
-if (process.argv.includes('--native-rtc')) {
+if (process.argv.includes('--native-test-bundle') && process.argv.includes('--native-rtc')) {
   const archive = path.join(release, `Piik-RTC-native-v${packageVersion}.zip`);
   const quote = value => "'" + value.replaceAll("'", "''") + "'";
   run('powershell.exe', ['-NoProfile', '-Command', `Compress-Archive -LiteralPath ${quote(target)},${quote(path.join(release, 'native-volc'))} -DestinationPath ${quote(archive)} -Force`]);

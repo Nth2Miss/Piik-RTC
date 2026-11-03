@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 .npm-cache/
+.cache/
 *.log
 .reference/
 data/
