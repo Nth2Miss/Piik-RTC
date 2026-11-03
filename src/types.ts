@@ -10,5 +10,7 @@ export interface Room {
   createdAt: number;
   updatedAt: number;
   closesAt: number | null;
+  minVersion?: string | null;
+  joinable?: boolean;
 }
 export interface Participant { uid: number; name: string; sharing: boolean; isOwner: boolean }

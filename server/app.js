@@ -10,6 +10,7 @@ import { zegoToken } from './providers/zego/token.js';
 import { volcToken } from './providers/volc/token.js';
 import { QuotaMonitor, QUOTA_RESERVE_MINUTES } from './quota/monitor.js';
 import { clientIp, logEvent, providerLabel, roomLabel } from './shared/log.js';
+import { compareVersions, effectiveClientVersion } from './shared/version.js';
 
 const secret = () => randomBytes(24).toString('base64url');
 const hour = 3600;
@@ -83,16 +84,30 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     }
     next();
   });
+  app.use((req, _res, next) => {
+    req.clientVersion = effectiveClientVersion(req.get('x-client-version'), req.get('x-desktop-version'));
+    next();
+  });
   const participants = id => lifecycle.active(id)
     .map(s => ({ uid: s.uid, name: s.name, sharing: s.sharing, isOwner: s.isOwner }));
   const duplicateName = (roomId, identity, name) => {
     const lower = name.toLocaleLowerCase();
     return lifecycle.active(roomId).some(s => s.userId !== identity && s.name.toLocaleLowerCase() === lower);
   };
-  const publicRoom = (room, identity) => ({ id: room.id, name: room.name, description: room.description,
-    createdAt: room.createdAt, updatedAt: room.updatedAt, inviteKey: room.inviteKey, provider: room.provider,
-    isOwner: room.ownerId === identity, onlineCount: participants(room.id).length,
-    closesAt: room.emptySince === null ? null : room.emptySince + EMPTY_ROOM_TIMEOUT });
+  const publicRoom = (room, identity, clientVersion) => {
+    const minVersion = room.minVersion || null;
+    const comparison = minVersion && clientVersion ? compareVersions(clientVersion, minVersion) : null;
+    return { id: room.id, name: room.name, description: room.description,
+      createdAt: room.createdAt, updatedAt: room.updatedAt, inviteKey: room.inviteKey, provider: room.provider,
+      isOwner: room.ownerId === identity, onlineCount: participants(room.id).length, minVersion,
+      ...(clientVersion ? { joinable: !minVersion || (comparison !== null && comparison >= 0) } : {}),
+      closesAt: room.emptySince === null ? null : room.emptySince + EMPTY_ROOM_TIMEOUT };
+  };
+  const tooOld = (room, clientVersion) => {
+    if (!room.minVersion) return false;
+    const comparison = clientVersion ? compareVersions(clientVersion, room.minVersion) : null;
+    return comparison === null || comparison < 0;
+  };
   app.locals.participants = participants;
   app.locals.publicRoom = publicRoom;
   function access(req, res, next) {
@@ -135,9 +150,9 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   });
   app.get('/api/rooms', (req, res) => {
     lifecycle.sweep();
-    res.json({ rooms: store.all().map(room => publicRoom(room, req.identity)) });
+    res.json({ rooms: store.all().map(room => publicRoom(room, req.identity, req.clientVersion)) });
   });
-  app.get('/api/rooms/:id', access, (req, res) => res.json(publicRoom(req.room, req.identity)));
+  app.get('/api/rooms/:id', access, (req, res) => res.json(publicRoom(req.room, req.identity, req.clientVersion)));
   app.post('/api/rooms', async (req, res) => {
     const provider = req.body?.provider ?? 'agora';
     if (!Object.hasOwn(providers, provider)) return res.status(400).json({ error: '不支持的 RTC 服务商。' });
@@ -152,10 +167,10 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     lifecycle.sweep();
     if (store.count(req.identity) >= 50) return res.status(429).json({ error: '创建的房间太多，请关闭不用的房间。' });
     const now = Date.now();
-    const room = { id: randomBytes(6).toString('hex'), ownerId: req.identity, inviteKey: secret(), provider, ...fields, createdAt: now, updatedAt: now };
+    const room = { id: randomBytes(6).toString('hex'), ownerId: req.identity, inviteKey: secret(), provider, minVersion: req.clientVersion, ...fields, createdAt: now, updatedAt: now };
     store.create(room);
     logEvent('创建房间', { ip:clientIp(req), room:roomLabel(room), name:room.name, provider:providerLabel(provider) });
-    res.status(201).json(publicRoom(store.get(room.id), req.identity));
+    res.status(201).json(publicRoom(store.get(room.id), req.identity, req.clientVersion));
   });
   app.patch('/api/rooms/:id', access, async (req, res) => {
     if (req.room.ownerId !== req.identity) return res.status(403).json({ error: '只有房主可以修改房间。' });
@@ -166,7 +181,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
       return res.status(403).json({ error: '服务商预计可用时长已达到 500 分钟保护线，房间已关闭。' });
     }
     store.update(req.room.id, fields.name, fields.description);
-    res.json(publicRoom(store.get(req.room.id), req.identity));
+    res.json(publicRoom(store.get(req.room.id), req.identity, req.clientVersion));
     app.locals.notifyRoom(req.room.id, true);
   });
   app.delete('/api/rooms/:id', access, (req, res) => {
@@ -178,9 +193,10 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   });
   app.post('/api/rooms/:id/save', access, (req, res) => {
     store.save(req.room.id, req.identity);
-    res.json(publicRoom(req.room, req.identity));
+    res.json(publicRoom(req.room, req.identity, req.clientVersion));
   });
   app.post('/api/rooms/:id/token', access, async (req, res) => {
+    if (tooOld(req.room, req.clientVersion)) return res.status(403).json({ error: `该房间由 Piik-RTC v${req.room.minVersion} 创建，请更新到 v${req.room.minVersion} 或更高版本后进入。`, minVersion: req.room.minVersion });
     if (!providers[req.room.provider || 'agora']) return res.status(503).json({ error: '该房间的服务端 RTC 凭据尚未配置，或应用 ID 与已有用量记录不匹配。' });
     const status = await monitor.check();
     if (status[req.room.provider || 'agora']?.remaining <= QUOTA_RESERVE_MINUTES || !store.get(req.room.id)) return res.status(403).json({ error: '服务商预计可用时长已达到 500 分钟保护线，房间已关闭。' });
@@ -211,7 +227,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     const token = req.room.provider === 'zego' ? zegoToken(zegoId, env.ZEGO_SERVER_SECRET, String(session.uid), req.room.id, rtcTokenLifetime) : volcApp ? volcToken(volcApp.appId, volcApp.appKey, req.room.id, String(session.uid), rtcTokenLifetime) :
       agoraToken(env.AGORA_APP_ID, env.AGORA_APP_CERTIFICATE, req.room.id, session.uid, rtcTokenLifetime);
     res.json({ appId: req.room.provider === 'zego' ? zegoId : volcApp ? volcApp.appId : env.AGORA_APP_ID, provider: req.room.provider, token, uid: session.uid, sessionKey: session.key,
-      expiresAt: session.expiresAt, room: publicRoom(store.get(req.room.id), req.identity), displayName: session.name });
+      expiresAt: session.expiresAt, room: publicRoom(store.get(req.room.id), req.identity, req.clientVersion), displayName: session.name });
     app.locals.notifyRoom(req.room.id);
   });
   app.post('/api/rooms/:id/presence', access, ownSession, (req, res) => {
@@ -220,7 +236,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
       { ip:clientIp(req), room:roomLabel(req.room), name:req.session.name, provider:providerLabel(req.room.provider) });
     store.occupied(req.room.id, Date.now());
     app.locals.notifyRoom(req.room.id);
-    res.json({ participants: participants(req.room.id), room: publicRoom(store.get(req.room.id), req.identity), quotaHealthy:monitor.healthy() });
+    res.json({ participants: participants(req.room.id), room: publicRoom(store.get(req.room.id), req.identity, req.clientVersion), quotaHealthy:monitor.healthy() });
   });
   app.post('/api/rooms/:id/leave', access, ownSession, (req, res) => {
     lifecycle.leave(req.session.key);

@@ -9,7 +9,8 @@ export class RoomStore {
       CREATE TABLE IF NOT EXISTS rooms (
         id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, name TEXT NOT NULL,
         description TEXT NOT NULL, inviteKey TEXT NOT NULL,
-        createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0
+        createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
+        minVersion TEXT
       );
       CREATE TABLE IF NOT EXISTS memberships (
         roomId TEXT NOT NULL REFERENCES rooms(id), userId TEXT NOT NULL,
@@ -42,11 +43,12 @@ export class RoomStore {
     if (!columns.includes('lastActiveAt')) this.db.exec('ALTER TABLE rooms ADD COLUMN lastActiveAt INTEGER');
     if (!columns.includes('provider')) this.db.exec("ALTER TABLE rooms ADD COLUMN provider TEXT NOT NULL DEFAULT 'agora'");
     if (!columns.includes('closeReason')) this.db.exec('ALTER TABLE rooms ADD COLUMN closeReason TEXT');
+    if (!columns.includes('minVersion')) this.db.exec('ALTER TABLE rooms ADD COLUMN minVersion TEXT');
     this.db.exec('UPDATE rooms SET emptySince = updatedAt, lastActiveAt = updatedAt WHERE lastActiveAt IS NULL');
   }
   create(room) {
-    this.db.prepare('INSERT INTO rooms (id,ownerId,name,description,inviteKey,createdAt,updatedAt,provider) VALUES (?,?,?,?,?,?,?,?)')
-      .run(room.id, room.ownerId, room.name, room.description, room.inviteKey, room.createdAt, room.updatedAt, room.provider || 'agora');
+    this.db.prepare('INSERT INTO rooms (id,ownerId,name,description,inviteKey,createdAt,updatedAt,provider,minVersion) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(room.id, room.ownerId, room.name, room.description, room.inviteKey, room.createdAt, room.updatedAt, room.provider || 'agora', room.minVersion || null);
     this.db.prepare('UPDATE rooms SET emptySince = ?, lastActiveAt = ? WHERE id = ?').run(room.createdAt, room.createdAt, room.id);
   }
   get(id) { return this.db.prepare('SELECT * FROM rooms WHERE id = ? AND archived = 0').get(id); }

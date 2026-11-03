@@ -119,6 +119,20 @@ export interface DesktopNativeComponentProgress {
   total: number;
 }
 
+export interface DesktopUpdateStatus {
+  status: 'available' | 'latest' | 'error' | 'disabled';
+  currentVersion: string;
+  latestVersion?: string;
+  downloaded?: boolean;
+  error?: string;
+}
+
+export interface DesktopUpdateProgress {
+  phase: 'preparing' | 'downloading' | 'starting' | string;
+  percent: number;
+  bytesPerSecond: number;
+}
+
 export interface DesktopBridge {
   nativeRtc?(options: Record<string, unknown>): Promise<Record<string, unknown>>;
   nativeComponent?(options: { operation: 'status' | 'install'; force?: boolean }): Promise<DesktopNativeComponentStatus>;
@@ -141,6 +155,11 @@ export interface DesktopBridge {
   onAudioData(handler: (data: Uint8Array) => void): () => void;
   onAudioEnded(handler: (info: { code: string; message: string }) => void): () => void;
   getConfig(): Promise<{ serverUrl: string; version: string; desktop: boolean; platform: string }>;
+  checkUpdate?(options?: { manual?: boolean }): Promise<DesktopUpdateStatus>;
+  installUpdate?(): Promise<{ ok: boolean }>;
+  onUpdateProgress?(handler: (progress: DesktopUpdateProgress) => void): () => void;
+  onUpdateError?(handler: (info: { message: string }) => void): () => void;
+  onUpdateRequested?(handler: () => void): () => void;
   setServer(url: string): Promise<{ ok: boolean; serverUrl?: string; message?: string }>;
   cancelSetup(): Promise<{ ok: boolean }>;
 }

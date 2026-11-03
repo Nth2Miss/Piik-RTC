@@ -9,6 +9,9 @@
   var rawVideoFrames = new Set();
   var nativeVideoFrames = new Set();
   var nativeComponentProgress = new Set();
+  var updateProgress = new Set();
+  var updateError = new Set();
+  var updateRequested = new Set();
   var nativeTimestamp = 0;
   var videoEnded = new Set();
 
@@ -54,7 +57,7 @@
         if (!pending.has(id)) return;
         pending.delete(id);
         reject(new Error('本地桌面服务响应超时。'));
-      }, type === 'listSources' ? 30000 : type === 'nativeComponent' ? 600000 : 15000);
+      }, type === 'listSources' ? 30000 : type === 'nativeComponent' ? 600000 : type === 'checkUpdate' ? 120000 : 15000);
     });
   }
 
@@ -88,6 +91,16 @@
         received: message.received,
         total: message.total,
       });
+    } else if (message.type === 'update-progress') {
+      emit(updateProgress, {
+        phase: message.phase,
+        percent: message.percent,
+        bytesPerSecond: message.bytesPerSecond,
+      });
+    } else if (message.type === 'update-error') {
+      emit(updateError, { message: message.message || '' });
+    } else if (message.type === 'update-requested') {
+      emit(updateRequested, {});
     }
   });
 
@@ -161,6 +174,11 @@
     onAudioData: subscribe(audioData),
     onAudioEnded: subscribe(audioEnded),
     getConfig: function () { return request('getConfig'); },
+    checkUpdate: function (options) { return request('checkUpdate', options); },
+    installUpdate: function () { return request('installUpdate'); },
+    onUpdateProgress: subscribe(updateProgress),
+    onUpdateError: subscribe(updateError),
+    onUpdateRequested: subscribe(updateRequested),
     setServer: function (url) { return request('setServer', { url: url }); },
     cancelSetup: function () { return request('cancelSetup'); },
     submitAuth: function (options) { return request('submitAuth', options); },

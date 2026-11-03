@@ -2,7 +2,7 @@ import type { UID } from 'agora-rtc-sdk-ng';
 import { getAgoraSdk } from './agora-sdk';
 import { browserCaptureTracks, captureScreen, type CapturedScreen, type CapturePipelineStats } from './capture';
 import { captureDesktopScreen } from './desktop/capture.ts';
-import { desktopAudioLabel, type CaptureSelection } from './desktop/bridge.ts';
+import { desktopAudioLabel, desktopBridge, isDesktopApp, type CaptureSelection } from './desktop/bridge.ts';
 import { defaults, effectiveBitrate, normalizePreferences, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
 import { SourceController } from './source-controller';
 import { usernameError } from './username';
@@ -104,9 +104,21 @@ export function errorText(error: unknown) {
   if (e.name === 'TimeoutError') return '请求超时，请检查网络或稍后重试。';
   return e.message || e.msg || '连接失败，请稍后重试。';
 }
+const pageVersion = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
+let desktopVersion = '';
+// The page and the desktop shell update independently; send both and let the
+// server gate rooms on the lower version.
+const versionReady = (async () => {
+  if (!isDesktopApp || typeof desktopBridge?.getConfig !== 'function') return;
+  try {
+    const config = await Promise.race([desktopBridge.getConfig(), new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 1500))]);
+    if (config?.version) desktopVersion = config.version;
+  } catch { /* 旧桌面端不提供 getConfig 时退回页面版本 */ }
+})();
 async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
+  await versionReady;
   const response = await fetch(url, { method: method || (body === undefined ? 'GET' : 'POST'),
-    headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...(pageVersion ? { 'X-Client-Version': pageVersion } : {}), ...(desktopVersion ? { 'X-Desktop-Version': desktopVersion } : {}) }, credentials: 'same-origin',
     body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000) });
   const data = await response.json();
   if (!response.ok) throw new ApiError(data.error || '请求失败，请稍后重试。', response.status);
@@ -161,6 +173,7 @@ export function createRoomService() {
   let viewerIntentRevision = 0;
   let viewerExplicitlyCleared = false;
   let nativeEntryGate: ((provider: RtcProvider) => Promise<boolean>) | undefined;
+  let versionEntryGate: ((room: Room) => Promise<boolean>) | undefined;
   function members(): Participant[] {
     if (!joined || state.uid === undefined) return [];
     const known = new Map(participants.map(person => [person.uid, person]));
@@ -561,6 +574,12 @@ export function createRoomService() {
   }
   async function enter(room: Room) {
     if (!confirmed || (joined && state.room?.id === room.id)) return;
+    if (versionEntryGate) {
+      try { if (!(await versionEntryGate(room))) return; }
+      catch { /* the gate is optional; never block entry on it */ }
+      if (!confirmed) return;
+    }
+    if (room.joinable === false) throw new Error(`该房间需要 Piik-RTC v${room.minVersion} 或更高版本，请更新后再进入。`);
     const provider = room.provider || 'agora';
     if (nativeEntryGate) {
       try { if (!(await nativeEntryGate(provider))) return; }
@@ -801,6 +820,7 @@ export function createRoomService() {
     }),
     join:(room:Room) => run(() => enter(room)),
     setNativeEntryGate(gate?: (provider: RtcProvider) => Promise<boolean>) { nativeEntryGate = gate; },
+    setVersionEntryGate(gate?: (room: Room) => Promise<boolean>) { versionEntryGate = gate; },
     joinInvite:(value:string) => run(async () => {
       const url = new URL(value), id = new URLSearchParams(url.hash.slice(1)).get('room');
       if (url.origin !== location.origin || !/^[a-f0-9]{12}$/.test(id || '')) throw new Error('请使用本站生成的完整邀请链接。');

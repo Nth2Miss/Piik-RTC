@@ -268,7 +268,10 @@ namespace PiikRTC
         private void BuildContextMenu()
         {
             _contextMenu = new ContextMenuStrip();
-            _contextMenu.Items.Add(new ToolStripMenuItem("服务器设置…", null, (_, __) => ShowSetup("")));
+            if (_config.ServerLocked)
+                _contextMenu.Items.Add(new ToolStripMenuItem("服务器信息…", null, (_, __) => ShowServerInfo()));
+            else
+                _contextMenu.Items.Add(new ToolStripMenuItem("服务器设置…", null, (_, __) => ShowSetup("")));
             _contextMenu.Items.Add(new ToolStripMenuItem("清除保存的登录信息…", null, (_, __) => ForgetCredentials()));
             _contextMenu.Items.Add(new ToolStripMenuItem("重新加载", null, (_, __) =>
             {
@@ -278,7 +281,7 @@ namespace PiikRTC
             {
                 if (_webView?.CoreWebView2 != null) _webView.CoreWebView2.OpenDevToolsWindow();
             }));
-            _contextMenu.Items.Add(new ToolStripMenuItem("检查更新…", null, (_, __) => { _ = UpdateChecker.CheckAsync(this, true); }));
+            _contextMenu.Items.Add(new ToolStripMenuItem("检查更新…", null, (_, __) => RequestUpdateCheck()));
             _contextMenu.Items.Add(new ToolStripSeparator());
             _contextMenu.Items.Add(new ToolStripMenuItem("退出", null, (_, __) => Close()));
         }
@@ -356,7 +359,6 @@ namespace PiikRTC
 
                 if (string.IsNullOrWhiteSpace(_config.ServerUrl)) ShowSetup("");
                 else NavigateServer(_config.ServerUrl);
-                if (!_debug && !IsDisposed) _ = UpdateChecker.CheckAsync(this, false);
             }
             catch (Exception exception)
             {
@@ -395,6 +397,13 @@ namespace PiikRTC
 
         public void ShowSetup(string error)
         {
+            if (_config.ServerLocked)
+            {
+                MessageBox.Show(this, (string.IsNullOrWhiteSpace(error) ? "" : error + "\n\n")
+                    + "此客户端已固定连接到 " + _config.ServerUrl + "，无法更改服务器地址。",
+                    "Piik-RTC", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             if (_webView == null || _webView.CoreWebView2 == null) return;
             try { _bridge?.StopAll(); } catch { }
             _showingSetup = true;
@@ -588,6 +597,23 @@ namespace PiikRTC
             _autoAuthTried.Remove(origin);
             MessageBox.Show(this, "已清除保存的登录信息。重新启动程序后，连接服务器时会重新要求登录。",
                 "Piik-RTC", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void ShowServerInfo()
+        {
+            MessageBox.Show(this, "此客户端已固定连接到：\n" + _config.ServerUrl + "\n\n服务器地址由发布者内置，无法修改。",
+                "Piik-RTC", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void RequestUpdateCheck()
+        {
+            if (_showingSetup)
+            {
+                MessageBox.Show(this, "请先完成服务器设置，再检查更新。", "Piik-RTC 更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try { _webView?.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"update-requested\"}"); }
+            catch (Exception exception) { Log.Write("update request failed: " + exception.Message); }
         }
 
         private static void OpenExternal(string uri)

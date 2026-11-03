@@ -11,6 +11,7 @@ namespace PiikRTC
     internal sealed class AppConfig
     {
         public string ServerUrl = "";
+        public bool ServerLocked;
         public bool RememberAuth = true;
         public int Width = 1280;
         public int Height = 860;
@@ -49,16 +50,26 @@ namespace PiikRTC
             }
             catch (Exception exception) { Log.Write("config load failed: " + exception.Message); }
 
-            foreach (var argument in args)
+            var embedded = EmbeddedDefaultServer();
+            if (!string.IsNullOrWhiteSpace(embedded))
             {
-                if (argument.StartsWith("--server=", StringComparison.OrdinalIgnoreCase)) config.ServerUrl = argument.Substring("--server=".Length).Trim();
+                // A client distributed for one server must stay on that server:
+                // ignore saved config, --server and PIIK_SERVER_URL.
+                config.ServerUrl = embedded;
+                config.ServerLocked = true;
             }
-            if (string.IsNullOrWhiteSpace(config.ServerUrl))
+            else
             {
-                var env = Environment.GetEnvironmentVariable("PIIK_SERVER_URL");
-                if (!string.IsNullOrWhiteSpace(env)) config.ServerUrl = env.Trim();
+                foreach (var argument in args)
+                {
+                    if (argument.StartsWith("--server=", StringComparison.OrdinalIgnoreCase)) config.ServerUrl = argument.Substring("--server=".Length).Trim();
+                }
+                if (string.IsNullOrWhiteSpace(config.ServerUrl))
+                {
+                    var env = Environment.GetEnvironmentVariable("PIIK_SERVER_URL");
+                    if (!string.IsNullOrWhiteSpace(env)) config.ServerUrl = env.Trim();
+                }
             }
-            if (string.IsNullOrWhiteSpace(config.ServerUrl)) config.ServerUrl = EmbeddedDefaultServer();
             if (!string.IsNullOrWhiteSpace(config.ServerUrl))
             {
                 try
@@ -75,7 +86,7 @@ namespace PiikRTC
         /// <summary>
         /// A server URL baked into the executable at build time:
         /// dotnet build -p:PiikDefaultServerUrl=https://...
-        /// Saved config and --server / PIIK_SERVER_URL still take precedence.
+        /// When present it is authoritative and the client cannot be repointed.
         /// </summary>
         private static string EmbeddedDefaultServer()
         {

@@ -36,6 +36,15 @@ namespace PiikRTC
         public HashSet<string> TrustedDigests { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
+    internal sealed class UpdateStatus
+    {
+        public string State { get; set; }
+        public string CurrentVersion { get; set; }
+        public string LatestVersion { get; set; }
+        public bool Downloaded { get; set; }
+        public string Error { get; set; }
+    }
+
     /// <summary>
     /// Checks GitHub Releases on startup and installs a newer portable executable.
     /// Downloads probe the gh-proxy mirrors, pick the fastest one and fall back to GitHub directly.
@@ -73,34 +82,34 @@ namespace PiikRTC
         private static readonly Regex VersionPattern = new Regex(
             @"(?<tag>v?\d+(?:\.\d+){1,3})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static int _running;
+        private static readonly SemaphoreSlim CheckGate = new SemaphoreSlim(1, 1);
+        private static int _installing;
+        private static volatile ReleaseInfo _pendingRelease;
         private static long _lastProgressTicks;
 
-        public static async Task CheckAsync(IWin32Window owner, bool manual)
+        public static async Task<UpdateStatus> CheckForUpdateAsync(bool manual)
         {
-            if (!manual && IsDisabled()) return;
-            if (Interlocked.Exchange(ref _running, 1) != 0)
-            {
-                if (manual) MessageBox.Show(owner, "正在检查更新，请稍候。", "Piik-RTC 更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
+            var current = CurrentVersion();
+            if (!manual && IsDisabled()) return new UpdateStatus { State = "disabled", CurrentVersion = current.ToString(3) };
+            await CheckGate.WaitAsync();
             try
             {
-                var current = CurrentVersion();
                 var release = await FindLatestAsync();
                 if (release == null)
                 {
                     Log.Write("update check: no release information");
-                    if (manual) MessageBox.Show(owner, "检查更新失败，请检查网络后重试。", "Piik-RTC 更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
+                    return Failed(current, "检查更新失败，请检查网络后重试。");
                 }
 
                 Log.Write("update check: current=" + current + " latest=" + release.Version);
                 if (release.Version.CompareTo(current) <= 0)
                 {
-                    if (manual) MessageBox.Show(owner, "当前已是最新版本 v" + current.ToString(3) + "。", "Piik-RTC 更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
+                    return new UpdateStatus
+                    {
+                        State = "latest",
+                        CurrentVersion = current.ToString(3),
+                        LatestVersion = release.Version.ToString(3),
+                    };
                 }
 
                 // A mirror may announce a version, but only GitHub's authenticated
@@ -109,57 +118,72 @@ namespace PiikRTC
                     + "/releases/tags/" + Uri.EscapeDataString(release.Tag), TimeSpan.FromSeconds(15), true);
                 if (verified == null || verified.Version != release.Version || verified.TrustedDigests.Count == 0)
                     throw new InvalidOperationException("无法从 GitHub 官方接口验证更新文件，请稍后重试或手动下载。不会安装未经验证的镜像文件。");
-                release = verified;
-
-                var executable = Application.ExecutablePath;
-                var directory = Path.GetDirectoryName(executable) ?? "";
-                var target = Path.Combine(directory, "Piik-RTC-v" + release.Version.ToString(3) + ".exe");
-                if (!SamePath(target, executable) && File.Exists(target) && MatchesRelease(target, release))
+                _pendingRelease = verified;
+                var target = TargetPath(verified);
+                return new UpdateStatus
                 {
-                    if (ConfirmRestart(owner, release)) StartUpdateAndExit(target);
-                    return;
-                }
-
-                var answer = MessageBox.Show(
-                    owner,
-                    "发现新版本 v" + release.Version.ToString(3) + "\n当前版本 v" + current.ToString(3) + "\n\n是否立即下载并更新？更新完成后应用会自动重启。",
-                    "Piik-RTC 更新",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Information);
-                if (answer != DialogResult.Yes) return;
-
-                string downloaded;
-                using (var form = new UpdateProgressForm(release.Version, (progress, token) => DownloadAsync(release, target, progress, token)))
-                {
-                    var result = form.ShowDialog(owner);
-                    if (result != DialogResult.OK)
-                    {
-                        if (form.Error != null)
-                        {
-                            Log.Write("update download failed: " + form.Error);
-                            MessageBox.Show(
-                                owner,
-                                "更新下载失败：\n" + form.Error.Message + "\n\n请稍后重试，或到 GitHub Releases 手动下载。",
-                                "Piik-RTC 更新",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error);
-                        }
-                        return;
-                    }
-                    downloaded = form.DownloadedPath;
-                }
-
-                if (ConfirmRestart(owner, release)) StartUpdateAndExit(downloaded);
+                    State = "available",
+                    CurrentVersion = current.ToString(3),
+                    LatestVersion = verified.Version.ToString(3),
+                    Downloaded = File.Exists(target) && MatchesRelease(target, verified),
+                };
             }
             catch (Exception exception)
             {
                 Log.Write("update check failed: " + exception);
-                if (manual) MessageBox.Show(owner, "检查更新失败：" + exception.Message, "Piik-RTC 更新", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return Failed(current, exception.Message);
             }
             finally
             {
-                Interlocked.Exchange(ref _running, 0);
+                CheckGate.Release();
             }
+        }
+
+        public static bool StartInstall(IProgress<DownloadProgress> progress, Action<string> failed)
+        {
+            if (Interlocked.Exchange(ref _installing, 1) != 0) return false;
+            var release = _pendingRelease;
+            var context = SynchronizationContext.Current;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    if (release == null) throw new InvalidOperationException("请先检查更新。");
+                    var path = await DownloadAsync(release, TargetPath(release), progress, CancellationToken.None);
+                    progress?.Report(new DownloadProgress(100, 0));
+                    void Restart()
+                    {
+                        try { StartUpdateAndExit(path); }
+                        catch (Exception exception)
+                        {
+                            Log.Write("update restart failed: " + exception);
+                            failed?.Invoke(exception.Message);
+                        }
+                    }
+                    if (context != null) context.Post(_ => Restart(), null); else Restart();
+                }
+                catch (Exception exception)
+                {
+                    Log.Write("update install failed: " + exception);
+                    failed?.Invoke(exception.Message);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _installing, 0);
+                }
+            });
+            return true;
+        }
+
+        private static UpdateStatus Failed(Version current, string message)
+        {
+            return new UpdateStatus { State = "error", CurrentVersion = current.ToString(3), Error = message };
+        }
+
+        private static string TargetPath(ReleaseInfo release)
+        {
+            var directory = Path.GetDirectoryName(Application.ExecutablePath) ?? "";
+            return Path.Combine(directory, "Piik-RTC-v" + release.Version.ToString(3) + ".exe");
         }
 
         private static HttpClient CreateClient(bool allowRedirect)
@@ -778,24 +802,11 @@ namespace PiikRTC
             }
         }
 
-        private static bool ConfirmRestart(IWin32Window owner, ReleaseInfo release)
-        {
-            return MessageBox.Show(
-                owner,
-                "新版本 v" + release.Version.ToString(3) + " 已下载。\n\n是否立即重启完成更新？",
-                "Piik-RTC 更新",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question) == DialogResult.Yes;
-        }
-
         private static void StartUpdateAndExit(string target)
         {
             var current = Application.ExecutablePath;
             if (SamePath(current, target))
-            {
-                MessageBox.Show("更新文件已下载，但目标文件名与当前程序相同，请手动替换。", "Piik-RTC 更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
+                throw new InvalidOperationException("更新文件已下载，但目标文件名与当前程序相同，请手动替换。");
 
             var pid = Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
             var script = @"
@@ -836,7 +847,7 @@ try {
             catch (Exception exception)
             {
                 Log.Write("update restart failed: " + exception);
-                MessageBox.Show("无法启动更新程序：" + exception.Message, "Piik-RTC 更新", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                throw new InvalidOperationException("无法启动更新程序：" + exception.Message, exception);
             }
         }
 

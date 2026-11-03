@@ -283,6 +283,38 @@ namespace PiikRTC
                         ["platform"] = "win32",
                     };
 
+                case "checkUpdate":
+                {
+                    var update = await UpdateChecker.CheckForUpdateAsync(GetBool(payload, "manual"));
+                    return new Dictionary<string, object>
+                    {
+                        ["status"] = update.State,
+                        ["currentVersion"] = update.CurrentVersion ?? "",
+                        ["latestVersion"] = update.LatestVersion ?? "",
+                        ["downloaded"] = update.Downloaded,
+                        ["error"] = update.Error ?? "",
+                    };
+                }
+
+                case "installUpdate":
+                {
+                    var started = UpdateChecker.StartInstall(
+                        new Progress<DownloadProgress>(value => Post(new Dictionary<string, object>
+                        {
+                            ["type"] = "update-progress",
+                            ["phase"] = value.Percent < 0 ? "preparing" : value.Percent >= 100 ? "starting" : "downloading",
+                            ["percent"] = value.Percent,
+                            ["bytesPerSecond"] = value.BytesPerSecond,
+                        })),
+                        message => Post(new Dictionary<string, object>
+                        {
+                            ["type"] = "update-error",
+                            ["message"] = message,
+                        }));
+                    if (!started) throw new InvalidOperationException("更新已在进行中。");
+                    return new Dictionary<string, object> { ["ok"] = true };
+                }
+
                 case "setServer":
                     return await SetServer(GetString(payload, "url"));
 
@@ -739,6 +771,8 @@ namespace PiikRTC
 
         private async Task<Dictionary<string, object>> SetServer(string value)
         {
+            if (_host.Config.ServerLocked)
+                return new Dictionary<string, object> { ["ok"] = false, ["message"] = "此客户端已固定服务器地址，无法更改。" };
             string url;
             try
             {

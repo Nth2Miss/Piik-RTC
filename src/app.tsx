@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { StageOverlay, StageTv } from './vendor/piik/src/client/components/living/Stage';
 import { Couch, type CouchEntry } from './vendor/piik/src/client/components/living/Couch';
@@ -11,9 +11,9 @@ import { Glyph, type GlyphName } from './vendor/piik/src/client/ui/icons';
 import { useCopy } from './vendor/piik/src/client/ui/copy';
 import { applyTheme, currentTheme, subscribeTheme } from './vendor/piik/src/client/ui/theme';
 import { automaticBitrate, defaults, ZEGO_MAX_BITRATE, type Preferences } from './preferences';
-import { inviteUrl, type ConnectionSnapshot, type RoomService, type RoomState } from './room-service';
+import { errorText, inviteUrl, type ConnectionSnapshot, type RoomService, type RoomState } from './room-service';
 import { DesktopCapturePicker } from './desktop/CapturePicker.tsx';
-import { isDesktopApp, desktopBridge, type CaptureSelection, type DesktopNativeComponentProgress, type DesktopNativeComponentStatus } from './desktop/bridge.ts';
+import { isDesktopApp, desktopBridge, type CaptureSelection, type DesktopNativeComponentProgress, type DesktopNativeComponentStatus, type DesktopUpdateProgress, type DesktopUpdateStatus } from './desktop/bridge.ts';
 import { useNativeComponent, setNativeComponentStatus } from './desktop/native-component.ts';
 import { usernameError } from './username';
 import type { Room, RtcProvider } from './types';
@@ -119,7 +119,7 @@ function Lobby({ state, service, create, join, remove }: { state:RoomState; serv
   return <main className="lr-room sw-lobby"><header className="sw-lobby-heading"><div><h1>来客厅坐坐。</h1><p>挑一个房间，和大家一起看、一起分享。</p></div><Action icon="plus" primary onClick={create} disabled={state.busy || !state.configured}>创建房间</Action></header>
     {!state.configured && <div className="lr-notice is-bad"><span className="lr-pill"><Glyph name="alert"/>尚未配置 RTC 服务，请填写服务端 .env 后重启。</span></div>}
     <Row><label className="lr-input sw-search"><Glyph name="eye"/><input type="search" placeholder="搜索房间" aria-label="搜索房间" value={query} onChange={event => setQuery(event.target.value)}/></label><span className="sw-count">{state.rooms.length} 个开放房间</span><span className="lr-spacer"/><Action icon="refresh" onClick={() => void service.refresh()} disabled={state.busy}>刷新</Action><Action icon="link" onClick={join} disabled={state.busy}>使用邀请链接</Action></Row>
-    <div className="lr-viewer-overview-scroll sw-room-list" role="list" aria-label="开放房间">{rooms.map(room => <article key={room.id} className="sw-room-row" role="listitem"><button className="sw-room-enter" disabled={state.busy} onClick={() => void service.join(room)} aria-label={`进入房间：${room.name}`}><span className="sw-room-icon"><RoomGlyph/></span><span className="sw-room-copy"><strong>{room.name}</strong><span>{providerNames[room.provider || 'agora']} · {room.description || '欢迎加入，一起分享屏幕。'}</span></span><span className="sw-room-presence">{room.onlineCount ? `${room.onlineCount} 人在线` : `空房间 · ${Math.max(1, Math.ceil(((room.closesAt || Date.now()) - Date.now()) / 60000))} 分钟后关闭`}</span><Glyph name="arrowRight"/></button>{room.isOwner && <button className="lr-btn is-dense is-quiet" onClick={() => remove(room)} disabled={state.busy} aria-label={`关闭房间：${room.name}`}><Glyph name="x"/></button>}</article>)}
+    <div className="lr-viewer-overview-scroll sw-room-list" role="list" aria-label="开放房间">{rooms.map(room => <article key={room.id} className="sw-room-row" role="listitem"><button className="sw-room-enter" disabled={state.busy} onClick={() => void service.join(room)} aria-label={room.joinable === false ? `无法进入房间：${room.name}，需要更新到 v${room.minVersion}` : `进入房间：${room.name}`} title={room.joinable === false ? `该房间由 v${room.minVersion} 创建，请更新后再进入。` : undefined}><span className="sw-room-icon"><RoomGlyph/></span><span className="sw-room-copy"><strong>{room.name}</strong><span>{providerNames[room.provider || 'agora']} · {room.description || '欢迎加入，一起分享屏幕。'}</span></span><span className="sw-room-presence">{room.joinable === false ? `需更新到 v${room.minVersion}` : room.onlineCount ? `${room.onlineCount} 人在线` : `空房间 · ${Math.max(1, Math.ceil(((room.closesAt || Date.now()) - Date.now()) / 60000))} 分钟后关闭`}</span><Glyph name="arrowRight"/></button>{room.isOwner && <button className="lr-btn is-dense is-quiet" onClick={() => remove(room)} disabled={state.busy} aria-label={`关闭房间：${room.name}`}><Glyph name="x"/></button>}</article>)}
       {!rooms.length && <div className="sw-lobby-empty"><BrandMark size={64}/><h2>{query ? '没有找到这个房间。' : '客厅准备好了，等你开场。'}</h2><p>{query ? '换个关键词试试。' : '创建一个房间，邀请朋友一起分享。'}</p></div>}
     </div><p className="sw-footnote"><Glyph name="clock" size={14}/>房间空置 15 分钟自动关闭 · 每位成员都能同时共享</p>
   </main>;
@@ -405,6 +405,57 @@ function NativeEntryPrompt({ onDone }: { onDone:(proceed:boolean) => void }) {
     </footer>
   </Modal>;
 }
+type UpdateDialog = { kind:'available'; status:DesktopUpdateStatus } | { kind:'installing'; status?:DesktopUpdateStatus } | { kind:'latest'; status:DesktopUpdateStatus; required?:string } | { kind:'error'; message:string; retry:'check'|'install' };
+const updateSpeed = (bytes:number) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB/s` : bytes > 0 ? `${Math.max(1, Math.round(bytes / 1024))} KB/s` : '';
+const updateProgressText = (progress?:DesktopUpdateProgress) => {
+  if (!progress) return '正在准备下载…';
+  if (progress.phase === 'starting' || progress.percent >= 100) return '下载完成，正在重启…';
+  if (progress.percent < 0) return '正在选择更新线路…';
+  const speed = updateSpeed(progress.bytesPerSecond);
+  return `正在下载 ${Math.round(progress.percent)}%${speed ? ` · ${speed}` : ''}`;
+};
+function UpdatePrompt({ dialog, progress, onDismiss, onInstall }: { dialog:UpdateDialog; progress?:DesktopUpdateProgress; onDismiss:()=>void; onInstall:()=>void }) {
+  const installing = dialog.kind === 'installing';
+  const status = dialog.kind === 'error' ? undefined : dialog.status;
+  const version = status?.latestVersion || status?.currentVersion || '';
+  const title = dialog.kind === 'error' ? (dialog.retry === 'install' ? '更新未完成' : '检查更新') : dialog.kind === 'latest' ? '检查更新' : installing ? '正在更新 Piik-RTC' : `发现新版本 v${version}`;
+  const heading = dialog.kind === 'error' ? (dialog.retry === 'install' ? '更新未完成' : '检查更新失败') : dialog.kind === 'latest' ? '当前已是最新版本' : installing ? '正在下载更新' : '有新版本可用';
+  return <Modal title={title} close={onDismiss}>
+    <div className="sw-native-gate">
+      <div className="sw-native-gate-head">
+        <span className="sw-native-gate-icon"><Glyph name={dialog.kind === 'error' ? 'alert' : 'arrowDown'}/></span>
+        <div><span className="sw-native-badge">应用更新</span><h3>{heading}</h3></div>
+      </div>
+      {dialog.kind === 'error' ? <p>{dialog.message}</p> : dialog.kind === 'latest' ? <p>{dialog.required ? `当前版本 v${status?.currentVersion}，最新发布版本为 v${status?.latestVersion}，仍低于房间要求的 v${dialog.required}，请稍后再试。` : `当前版本 v${status?.currentVersion}，无需更新。`}</p> : <>
+        <p>当前版本 v{status?.currentVersion}，最新版本 v{version}。更新完成后应用会自动重启。</p>
+        {installing && <div className="sw-native-download"><div className="sw-native-progress"><span style={{ width:`${Math.max(0, Math.min(100, progress?.percent || 0))}%` }}/></div><small>{updateProgressText(progress)}</small></div>}
+      </>}
+    </div>
+    <footer className="sw-dialog-footer">
+      {!installing && <Action icon="x" onClick={onDismiss}>{dialog.kind === 'available' ? '稍后更新' : '关闭'}</Action>}
+      {(dialog.kind === 'available' || dialog.kind === 'error') && <Action icon="arrowDown" primary onClick={onInstall}>{dialog.kind === 'error' ? (dialog.retry === 'install' ? '重试下载' : '重试检查') : '立即更新'}</Action>}
+    </footer>
+  </Modal>;
+}
+function VersionEntryPrompt({ room, onDone, onUpdate }: { room:Room; onDone:() => void; onUpdate:() => void }) {
+  const directUpdate = !!desktopBridge?.checkUpdate && !!desktopBridge?.installUpdate;
+  return <Modal title="需要更新 Piik-RTC" close={onDone}>
+    <div className="sw-native-gate">
+      <div className="sw-native-gate-head">
+        <span className="sw-native-gate-icon"><Glyph name="alert"/></span>
+        <div><span className="sw-native-badge">版本要求</span><h3>当前客户端版本过低</h3></div>
+      </div>
+      {directUpdate
+        ? <p>该房间由 Piik-RTC v{room.minVersion} 创建，请更新到 v{room.minVersion} 或更高版本后再进入。点击“立即更新”下载并安装，或右键选择“检查更新…”。</p>
+        : <p>该房间由 Piik-RTC v{room.minVersion} 创建，请更新到 v{room.minVersion} 或更高版本后再进入。右键选择“检查更新”，或重新启动客户端进行更新。</p>}
+    </div>
+    <footer className="sw-dialog-footer">
+      {directUpdate
+        ? <><Action icon="x" onClick={onDone}>暂不更新</Action><Action icon="arrowDown" primary onClick={onUpdate}>立即更新</Action></>
+        : <Action icon="check" primary onClick={onDone}>知道了</Action>}
+    </footer>
+  </Modal>;
+}
 function App({ service }: { service:RoomService }) {
   const state = useSyncExternalStore(service.subscribe, service.getSnapshot);
   const [statusPage, setStatusPage] = useState(location.hash === '#status');
@@ -414,6 +465,11 @@ function App({ service }: { service:RoomService }) {
   const [troubleshooting,setTroubleshooting] = useState(false);
   const [entryStatus,setEntryStatus] = useState<DesktopNativeComponentStatus>();
   const entryResolve = useRef<((proceed:boolean) => void) | null>(null);
+  const [blockedRoom,setBlockedRoom] = useState<Room>();
+  const versionResolve = useRef<((proceed:boolean) => void) | null>(null);
+  const [updateDialog,setUpdateDialog] = useState<UpdateDialog>();
+  const [updateProgress,setUpdateProgress] = useState<DesktopUpdateProgress>();
+  const [checkingUpdate,setCheckingUpdate] = useState(false);
   const close = () => { setDialog(null); setTroubleshooting(false); };
   useEffect(() => {
     service.setNativeEntryGate(async provider => {
@@ -436,12 +492,85 @@ function App({ service }: { service:RoomService }) {
     setEntryStatus(undefined);
     resolve?.(proceed);
   };
+  useEffect(() => {
+    service.setVersionEntryGate(async room => {
+      if (room.joinable !== false) return true;
+      return await new Promise<boolean>(resolve => {
+        versionResolve.current = resolve;
+        setBlockedRoom(room);
+      });
+    });
+    return () => service.setVersionEntryGate(undefined);
+  }, [service]);
+  const finishVersionEntry = () => {
+    const resolve = versionResolve.current;
+    versionResolve.current = null;
+    setBlockedRoom(undefined);
+    resolve?.(false);
+  };
+  const startInstall = async (status?:DesktopUpdateStatus) => {
+    const bridge = desktopBridge;
+    if (!bridge?.installUpdate) return;
+    setUpdateDialog({ kind:'installing', status });
+    setUpdateProgress(undefined);
+    try { await bridge.installUpdate(); }
+    catch (error) { setUpdateDialog({ kind:'error', message:errorText(error), retry:'install' }); }
+  };
+  const checkForUpdate = useCallback(async (manual:boolean, requiredVersion?:string, autoInstall = false) => {
+    const bridge = desktopBridge;
+    if (!bridge?.checkUpdate) return;
+    if (manual) setCheckingUpdate(true);
+    try {
+      const status = await bridge.checkUpdate({ manual });
+      if (status.status === 'available') {
+        setUpdateDialog({ kind:'available', status });
+        if (autoInstall) void startInstall(status);
+      }
+      else if (manual && status.status === 'latest') setUpdateDialog({ kind:'latest', status, required:requiredVersion });
+      else if (manual && status.status === 'error') setUpdateDialog({ kind:'error', message:status.error || '检查更新失败，请稍后重试。', retry:'check' });
+      else if (manual && status.status === 'disabled') setUpdateDialog({ kind:'error', message:'更新检查已被禁用（PIIK_DISABLE_UPDATE）。', retry:'check' });
+    } catch (error) {
+      if (manual) setUpdateDialog({ kind:'error', message:errorText(error), retry:'check' });
+    } finally {
+      if (manual) setCheckingUpdate(false);
+    }
+  }, []);
+  useEffect(() => {
+    const bridge = desktopBridge;
+    if (!isDesktopApp || !bridge) return;
+    const offProgress = bridge.onUpdateProgress?.(value => {
+      setUpdateProgress(value);
+      setUpdateDialog(current => current && (current.kind === 'available' || current.kind === 'error') ? { kind:'installing', status:current.kind === 'available' ? current.status : undefined } : current);
+    });
+    const offError = bridge.onUpdateError?.(info => setUpdateDialog({ kind:'error', message:info.message || '更新下载失败，请稍后重试。', retry:'install' }));
+    const offRequested = bridge.onUpdateRequested?.(() => { void checkForUpdate(true); });
+    void checkForUpdate(false);
+    return () => { offProgress?.(); offError?.(); offRequested?.(); };
+  }, [checkForUpdate]);
+  const installUpdate = async () => {
+    const bridge = desktopBridge;
+    if (!bridge?.installUpdate) return;
+    await startInstall(updateDialog?.kind === 'available' ? updateDialog.status : undefined);
+  };
+  const handleUpdateAction = () => {
+    if (updateDialog?.kind === 'error' && updateDialog.retry === 'check') { setUpdateDialog(undefined); void checkForUpdate(true); return; }
+    void installUpdate();
+  };
+  const updateFromGate = () => {
+    const required = blockedRoom?.minVersion || undefined;
+    finishVersionEntry();
+    setUpdateDialog(undefined);
+    void checkForUpdate(true, required, true);
+  };
   useEffect(() => { document.body.dataset.view = state.view; },[state.view]);
   return <div className={`lr-app sw-app${state.view === 'room' ? ' is-room' : ''}`}><Header state={state} service={service} help={() => setDialog('help')}/>
     {statusPage ? <ServiceStatusPage providers={state.providers} ready={state.ready} room={state.view === 'room' ? state.room : undefined}/> : state.view === 'welcome' ? <Welcome state={state} service={service}/> : state.view === 'lobby' ? <Lobby state={state} service={service} create={() => setDialog('create')} join={() => setDialog('join')} remove={setRemoving}/> : <RoomPage state={state} service={service} settings={() => setDialog('settings')} edit={() => setDialog('edit')} members={() => setDialog('members')} connection={() => setDialog('connection')} capture={() => setDialog('capture')}/>}
     {state.notice && <div className={`lr-notice sw-notice ${state.notice.error ? 'is-bad' : 'is-good'}`} role={state.notice.error ? 'alert' : 'status'}><span className="lr-pill"><Glyph name={state.notice.error ? 'alert' : 'check'}/>{state.notice.message}</span><button className="lr-btn is-dense is-quiet" onClick={service.dismissNotice} aria-label="关闭通知"><Glyph name="x"/></button></div>}
     {state.budgetAlert && <Modal title="服务余量不足" close={service.dismissBudgetAlert}><p>{state.budgetAlert}</p><footer className="sw-dialog-footer"><Action icon="check" primary onClick={service.dismissBudgetAlert}>知道了</Action></footer></Modal>}
     {entryStatus && <NativeEntryPrompt onDone={finishEntry}/>}
+    {blockedRoom && <VersionEntryPrompt room={blockedRoom} onDone={finishVersionEntry} onUpdate={updateFromGate}/>}
+    {checkingUpdate && <Modal title="检查更新" close={() => setCheckingUpdate(false)}><p>正在检查更新…</p></Modal>}
+    {updateDialog && <UpdatePrompt dialog={updateDialog} progress={updateProgress} onDismiss={() => setUpdateDialog(undefined)} onInstall={handleUpdateAction}/>}
     {(dialog === 'create' || dialog === 'edit') && <RoomEditor key={dialog} room={dialog === 'edit' ? state.room : undefined} state={state} service={service} busy={state.busy} close={close}/>}
     {dialog === 'join' && <Modal title="进入朋友的房间" close={close}><form className="sw-form" onSubmit={async event => { event.preventDefault(); const form = new FormData(event.currentTarget); if (await service.joinInvite(String(form.get('invite')))) close(); }}><label>房间邀请链接<span className="lr-input"><Glyph name="link"/><input name="invite" type="url" placeholder="粘贴邀请链接" required autoFocus/></span></label><Action icon="arrowRight" primary type="submit" disabled={state.busy}>进入房间</Action></form></Modal>}
     {dialog === 'settings' && <Settings state={state} service={service} close={close}/>}
