@@ -56,7 +56,7 @@ npm run desktop:build    # 构建 release/Piik-RTC-v<版本>.exe
 npm run desktop:build -- --server=https://piik.example.com   # 内嵌并固定服务器
 ```
 
-构建需要 Node.js 24+ 和 .NET 9 SDK。未内嵌服务器地址时，首次启动填写地址，之后可在右键菜单“服务器设置…”中修改；内嵌地址的客户端会固定使用该地址，用户无法更改。启动时会自动检查更新，也可以右键选择“检查更新…”。低版本客户端进入由新版本创建的房间时会被拒绝并提示更新。
+构建需要 Node.js 24+ 和 .NET 9 SDK。未内嵌服务器地址时，首次启动填写地址，之后可在右键菜单“服务器设置…”中修改；内嵌地址的客户端会固定使用该地址，用户无法更改，并且会把地址写入 `%LOCALAPPDATA%\PiikRTC\server.lock`，自动更新替换为正式版后仍保持锁定。启动时会自动检查更新，也可以右键选择“检查更新…”。低版本客户端进入由新版本创建的房间时会被拒绝并提示更新。
 
 架构、限制和排障见 [docs/desktop.md](docs/desktop.md)。
 

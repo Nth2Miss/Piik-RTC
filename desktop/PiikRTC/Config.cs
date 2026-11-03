@@ -32,6 +32,11 @@ namespace PiikRTC
             get { return Path.Combine(DataDirectory, "config.json"); }
         }
 
+        public static string ServerLockPath
+        {
+            get { return Path.Combine(DataDirectory, "server.lock"); }
+        }
+
         public static AppConfig Load(string[] args)
         {
             var config = new AppConfig();
@@ -51,11 +56,19 @@ namespace PiikRTC
             catch (Exception exception) { Log.Write("config load failed: " + exception.Message); }
 
             var embedded = EmbeddedDefaultServer();
+            var persistedLock = ReadServerLock();
             if (!string.IsNullOrWhiteSpace(embedded))
             {
                 // A client distributed for one server must stay on that server:
                 // ignore saved config, --server and PIIK_SERVER_URL.
                 config.ServerUrl = embedded;
+                config.ServerLocked = true;
+            }
+            else if (!string.IsNullOrWhiteSpace(persistedLock))
+            {
+                // The public build replaces the distributed exe on update; the
+                // lock file keeps it bound to the same server.
+                config.ServerUrl = persistedLock;
                 config.ServerLocked = true;
             }
             else
@@ -80,7 +93,43 @@ namespace PiikRTC
                 }
                 catch { config.ServerUrl = ""; }
             }
+            if (string.IsNullOrWhiteSpace(config.ServerUrl)) config.ServerLocked = false;
+            else if (config.ServerLocked) WriteServerLock(config.ServerUrl);
             return config;
+        }
+
+        private static string ReadServerLock()
+        {
+            try
+            {
+                if (!File.Exists(ServerLockPath)) return "";
+                var value = File.ReadAllText(ServerLockPath, Encoding.UTF8).Trim();
+                if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return "";
+                if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return "";
+                return uri.Scheme + Uri.SchemeDelimiter + uri.Authority;
+            }
+            catch (Exception exception)
+            {
+                Log.Write("server lock load failed: " + exception.Message);
+                return "";
+            }
+        }
+
+        private static void WriteServerLock(string url)
+        {
+            try
+            {
+                if (File.Exists(ServerLockPath))
+                {
+                    var current = File.ReadAllText(ServerLockPath, Encoding.UTF8).Trim();
+                    if (string.Equals(current, url, StringComparison.OrdinalIgnoreCase)) return;
+                }
+                File.WriteAllText(ServerLockPath, url + Environment.NewLine, new UTF8Encoding(false));
+            }
+            catch (Exception exception)
+            {
+                Log.Write("server lock save failed: " + exception.Message);
+            }
         }
 
         /// <summary>

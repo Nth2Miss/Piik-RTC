@@ -10,8 +10,8 @@
 2. 首次启动填写已部署的 Piik-RTC 服务器地址：
    - 生产环境必须使用 `https://`，本机调试可以使用 `http://localhost:3000`。
    - 如果服务器通过 Nginx 等反向代理启用了 HTTP 认证（如 `auth_basic`），连接后会在应用窗口内显示登录页。勾选“记住密码”后会用当前 Windows 账户加密保存；服务器地址里不用写 `user:pass@`。
-   - 如果构建时内嵌了服务端地址，启动时会直接连接并锁定该地址：不读取本地配置，忽略 `--server` 启动参数和 `PIIK_SERVER_URL` 环境变量，右键菜单只显示服务器信息。
-3. 未内嵌地址时，地址保存在 `%LOCALAPPDATA%\PiikRTC\config.json`；右键菜单“服务器设置…”可以修改，也支持 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。优先级：启动参数 > 环境变量 > 已保存配置。
+   - 如果构建时内嵌了服务端地址，启动时会直接连接并锁定该地址：不读取本地配置，忽略 `--server` 启动参数和 `PIIK_SERVER_URL` 环境变量，右键菜单只显示服务器信息。内嵌地址会写入 `%LOCALAPPDATA%\PiikRTC\server.lock`；自动更新替换为未内嵌地址的正式版后，新 exe 仍会读取该文件并继续锁定该地址。
+3. 未锁定服务器时，地址保存在 `%LOCALAPPDATA%\PiikRTC\config.json`；右键菜单“服务器设置…”可以修改，也支持 `--server=https://...` 或环境变量 `PIIK_SERVER_URL`。优先级：启动参数 > 环境变量 > 已保存配置。
 4. 旧版本使用的 `%LOCALAPPDATA%\PiikDesktop` 不会自动迁移。
 5. 桌面端加载服务器上的网页前端，服务端更新后界面会同步更新。房间会记录创建时的客户端版本；低版本客户端进入新版本创建的房间时会被拒绝并提示更新。
 
@@ -82,7 +82,7 @@ npm run desktop:build -- --server=https://piik.example.com
 npm run desktop:build:embed -- --server=https://piik.example.com
 ```
 
-内嵌地址会写入 exe 并在每次启动时强制生效：不读取 `config.json` 中的 `serverUrl`，忽略 `--server` 启动参数和 `PIIK_SERVER_URL` 环境变量，右键菜单只显示服务器信息，设置页也无法修改。适合分发只连接自己服务器的客户端。`desktop:build:embed` 必须通过 `--server` 或 `PIIK_DEFAULT_SERVER_URL` 指定地址。
+内嵌地址会写入 exe 并在每次启动时强制生效：锁定启动时以 exe 内嵌地址为准，忽略 `config.json` 中已有的 `serverUrl`、`--server` 启动参数和 `PIIK_SERVER_URL` 环境变量，右键菜单只显示服务器信息，设置页也无法修改。同时会把地址写入 `%LOCALAPPDATA%\PiikRTC\server.lock`，因此自动更新替换为未内嵌地址的正式版后，新 exe 仍会读取该文件并继续锁定同一服务器。适合分发只连接自己服务器的客户端。`desktop:build:embed` 必须通过 `--server` 或 `PIIK_DEFAULT_SERVER_URL` 指定地址。
 
 版本号取自 `package.json`，构建时写入桌面程序集，并显示在网页帮助页和桌面服务器设置页。发布前先提升版本（例如 `npm version patch --no-git-tag-version`）。桌面端由手动触发的 `.github/workflows/desktop.yml` 构建：运行 `Desktop` workflow，输入必须与 `package.json` 版本一致，随后构建 `Piik-RTC-v<版本>.exe` 和 `version.json`、上传 artifact，并创建/更新 GitHub Release。
 
@@ -129,7 +129,8 @@ npm run desktop:build:embed -- --server=https://piik.example.com
 ## 安全边界
 
 - WebView2 只允许导航到配置的服务器来源；外部链接交给系统浏览器打开。
-- 原生 IPC 会校验消息来源；只有未内嵌地址时，本地设置页才能修改服务器地址。
+- 原生 IPC 会校验消息来源；只有未锁定服务器时，本地设置页才能修改服务器地址。
+- `server.lock` 用于分发策略，不是防篡改机制；能访问本机文件的用户仍可删除或修改它来解除锁定。
 - 反向代理的 HTTP 认证密码通过 Windows DPAPI 按当前用户加密后保存在 `%LOCALAPPDATA%\PiikRTC\credentials.json`，其他 Windows 账户无法解密。
 - 共享来源由用户在原生选择器中明确选择；关闭选择器会清空待共享来源。
 - 音频组件只读取系统/进程音频，不采集麦克风或摄像头。
