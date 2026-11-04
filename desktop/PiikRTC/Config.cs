@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 
 namespace PiikRTC
 {
@@ -185,14 +187,25 @@ namespace PiikRTC
     {
         private static readonly object Gate = new object();
         public static readonly string FilePath = Path.Combine(Path.GetTempPath(), "piik-desktop.log");
+        // 更新期间新旧进程、PowerShell 会同时写这个文件，带进程号才能分清每行归属。
+        private static readonly string Tag = "[" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) + "] ";
 
         public static void Write(string message)
         {
-            try
+            var line = DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture) + " " + Tag + message + Environment.NewLine;
+            for (var attempt = 0; attempt < 20; attempt++)
             {
-                lock (Gate) File.AppendAllText(FilePath, DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture) + " " + message + Environment.NewLine, Encoding.UTF8);
+                try
+                {
+                    lock (Gate) File.AppendAllText(FilePath, line, Encoding.UTF8);
+                    return;
+                }
+                catch
+                {
+                    // 另一个进程正在写入时先等一会儿，日志宁慢勿丢。
+                    Thread.Sleep(25);
+                }
             }
-            catch { /* logging must never break the app */ }
         }
     }
 }

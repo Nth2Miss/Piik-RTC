@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -149,10 +150,12 @@ namespace PiikRTC
                 try
                 {
                     if (release == null) throw new InvalidOperationException("请先检查更新。");
+                    Log.Write("update install begin: version=" + release.Version + " target=" + TargetPath(release));
                     var path = await DownloadAsync(release, TargetPath(release), progress, CancellationToken.None);
                     progress?.Report(new DownloadProgress(100, 0));
                     void Restart()
                     {
+                        Log.Write("update restart begin: target=" + path);
                         try { StartUpdateAndExit(path); }
                         catch (Exception exception)
                         {
@@ -809,19 +812,79 @@ namespace PiikRTC
                 throw new InvalidOperationException("更新文件已下载，但目标文件名与当前程序相同，请手动替换。");
 
             var pid = Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
+            // 直接让新版本接管，避免依赖可能被安全策略拦截的 PowerShell。
+            // 新版本会等待本进程退出后再获取单实例锁，并删除旧 exe。
+            if (TryStartNewVersion(target, current, pid))
+            {
+                Log.Write("update handoff: application exit");
+                Application.Exit();
+                return;
+            }
+            Log.Write("update handoff: direct start failed, falling back to PowerShell");
+            // 更新拉起失败时这段脚本是唯一的现场，每个分支都必须写日志：
+            // 脚本是否执行、等待旧进程多久、Start-Process 的异常、新进程 3 秒后的状态、旧 exe 是否删除。
             var script = @"
-Start-Sleep -Milliseconds 700
-while (Get-Process -Id " + pid + @" -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300 }
-try {
-  $new = Start-Process -FilePath '" + EscapePowerShell(target) + @"' -PassThru
-  Start-Sleep -Seconds 3
-  if (-not $new.HasExited) {
-    Remove-Item -LiteralPath '" + EscapePowerShell(current) + @"' -Force -ErrorAction SilentlyContinue
-  } else {
-    Start-Process -FilePath '" + EscapePowerShell(current) + @"'
+$ErrorActionPreference = 'Continue'
+$log = '" + EscapePowerShell(Log.FilePath) + @"'
+$target = '" + EscapePowerShell(target) + @"'
+$current = '" + EscapePowerShell(current) + @"'
+$oldPid = " + pid + @"
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+function Write-UpdLog([string]$text) {
+  $line = (Get-Date -Format 'HH:mm:ss.fff') + ' [updater:' + $PID + '] ' + $text
+  for ($i = 0; $i -lt 40; $i++) {
+    try { [System.IO.File]::AppendAllText($log, $line + [Environment]::NewLine, $utf8); return } catch { Start-Sleep -Milliseconds 25 }
   }
+}
+try {
+  Write-UpdLog ('script start: ps=' + $PSVersionTable.PSVersion + ' user=' + [Environment]::UserName + ' cwd=' + (Get-Location).Path)
+  Write-UpdLog ('old pid=' + $oldPid + ' target=' + $target + ' current=' + $current)
+  Write-UpdLog ('target exists=' + (Test-Path -LiteralPath $target) + ' current exists=' + (Test-Path -LiteralPath $current))
+  Start-Sleep -Milliseconds 700
+  $wait = [System.Diagnostics.Stopwatch]::StartNew()
+  $old = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+  while ($old -ne $null) {
+    if ($wait.ElapsedMilliseconds -gt 120000) { Write-UpdLog ('old process wait timeout: ' + [int]($wait.ElapsedMilliseconds) + 'ms'); break }
+    Start-Sleep -Milliseconds 300
+    $old = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+  }
+  $wait.Stop()
+  Write-UpdLog ('old process wait: ' + [int]($wait.ElapsedMilliseconds) + 'ms, still running=' + ($null -ne $old))
+  $new = $null
+  try {
+    Write-UpdLog 'start target'
+    $new = Start-Process -FilePath $target -PassThru -ErrorAction Stop
+    Write-UpdLog ('started target: pid=' + $new.Id + ' name=' + $new.ProcessName)
+  } catch {
+    Write-UpdLog ('start target failed: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message + ' hresult=' + $_.Exception.HResult)
+    Write-UpdLog ('start target stack: ' + $_.Exception.StackTrace)
+  }
+  if ($new -eq $null) {
+    try { $old = Start-Process -FilePath $current -PassThru -ErrorAction Stop; Write-UpdLog ('fallback started old exe: pid=' + $old.Id) } catch { Write-UpdLog ('fallback start failed: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message) }
+  } else {
+    Start-Sleep -Seconds 3
+    $new.Refresh()
+    $alive = -not $new.HasExited
+    if ($alive) {
+      try { Write-UpdLog ('target after 3s: alive=True pid=' + $new.Id + ' title=' + $new.MainWindowTitle + ' handle=' + $new.MainWindowHandle + ' responding=' + $new.Responding) } catch { Write-UpdLog ('target after 3s: alive=True pid=' + $new.Id + ' info failed: ' + $_.Exception.Message) }
+      try {
+        Remove-Item -LiteralPath $current -Force -ErrorAction Stop
+        Write-UpdLog ('removed old exe: ' + $current + ' stillExists=' + (Test-Path -LiteralPath $current))
+      } catch {
+        Write-UpdLog ('remove old exe failed: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+      }
+      Start-Sleep -Seconds 2
+      try { $new.Refresh(); Write-UpdLog ('target after 5s: alive=' + (-not $new.HasExited) + ' title=' + $new.MainWindowTitle + ' handle=' + $new.MainWindowHandle) } catch { Write-UpdLog ('target after 5s check failed: ' + $_.Exception.Message) }
+    } else {
+      Write-UpdLog ('target exited within 3s: code=' + $new.ExitCode)
+      try { $old = Start-Process -FilePath $current -PassThru -ErrorAction Stop; Write-UpdLog ('fallback started old exe: pid=' + $old.Id) } catch { Write-UpdLog ('fallback start failed: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message) }
+    }
+  }
+  Write-UpdLog 'script end'
 } catch {
-  if (Test-Path -LiteralPath '" + EscapePowerShell(current) + @"') { Start-Process -FilePath '" + EscapePowerShell(current) + @"' }
+  Write-UpdLog ('script error: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message + ' hresult=' + $_.Exception.HResult)
+  Write-UpdLog ('script error stack: ' + $_.Exception.StackTrace)
+  try { if (Test-Path -LiteralPath $current) { Start-Process -FilePath $current -ErrorAction Stop; Write-UpdLog 'catch fallback started old exe' } } catch { Write-UpdLog ('catch fallback failed: ' + $_.Exception.Message) }
 }
 ";
             var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
@@ -829,6 +892,13 @@ try {
                 Environment.GetFolderPath(Environment.SpecialFolder.System),
                 @"WindowsPowerShell\v1.0\powershell.exe");
             if (!File.Exists(powershell)) powershell = "powershell.exe";
+
+            foreach (var line in script.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+                Log.Write("update script| " + line);
+            Log.Write("update restart: current=" + current + " target=" + target + " pid=" + pid
+                + " powershell=" + powershell + " powershellExists=" + File.Exists(powershell)
+                + " targetExists=" + File.Exists(target)
+                + " targetLength=" + (File.Exists(target) ? new FileInfo(target).Length : 0));
 
             try
             {
@@ -840,8 +910,11 @@ try {
                     UseShellExecute = false,
                     CreateNoWindow = true,
                 };
-                Process.Start(start);
-                Log.Write("update restart scheduled: " + target);
+                var process = Process.Start(start);
+                var powershellPid = "unknown";
+                try { if (process != null) powershellPid = process.Id.ToString(CultureInfo.InvariantCulture); } catch (Exception exception) { powershellPid = "unavailable: " + exception.Message; }
+                Log.Write("update restart scheduled: target=" + target + " pid=" + pid + " powershell=" + powershell + " powershellPid=" + powershellPid);
+                Log.Write("update restart: application exit");
                 Application.Exit();
             }
             catch (Exception exception)
@@ -850,6 +923,140 @@ try {
                 throw new InvalidOperationException("无法启动更新程序：" + exception.Message, exception);
             }
         }
+
+        private static bool TryStartNewVersion(string target, string current, string oldPid)
+        {
+            var arguments = "--restart-after=" + oldPid + " --delete-old=\"" + current + "\"";
+            var workingDirectory = Path.GetDirectoryName(target) ?? Environment.CurrentDirectory;
+            int breakawayPid;
+            if (TryCreateBreakaway(target, arguments, workingDirectory, out breakawayPid))
+            {
+                try
+                {
+                    using (var process = Process.GetProcessById(breakawayPid))
+                    {
+                        if (process.WaitForExit(1500))
+                        {
+                            Log.Write("update handoff breakaway exited: pid=" + breakawayPid);
+                            return false;
+                        }
+                    }
+                    Log.Write("update handoff started (breakaway): target=" + target + " pid=" + breakawayPid);
+                    return true;
+                }
+                catch (ArgumentException)
+                {
+                    Log.Write("update handoff breakaway process missing: pid=" + breakawayPid);
+                    return false;
+                }
+                catch (Exception exception)
+                {
+                    Log.Write("update handoff breakaway check failed: " + exception.Message);
+                    return false;
+                }
+            }
+
+            try
+            {
+                var start = new ProcessStartInfo
+                {
+                    FileName = target,
+                    Arguments = arguments,
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                var process = Process.Start(start);
+                if (process == null)
+                {
+                    Log.Write("update handoff start returned null");
+                    return false;
+                }
+                if (process.WaitForExit(1500))
+                {
+                    Log.Write("update handoff exited: pid=" + process.Id + " code=" + process.ExitCode);
+                    return false;
+                }
+                Log.Write("update handoff started: target=" + target + " pid=" + process.Id);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Log.Write("update handoff start failed: " + exception);
+                return false;
+            }
+        }
+
+        private static bool TryCreateBreakaway(string target, string arguments, string workingDirectory, out int pid)
+        {
+            pid = 0;
+            try
+            {
+                var startup = new StartupInfo();
+                startup.cb = Marshal.SizeOf(typeof(StartupInfo));
+                var command = new StringBuilder("\"" + target + "\" " + arguments, 4096);
+                ProcessInformation process;
+                // 某些企业环境把应用放在 kill-on-close 的 Job 里，普通子进程会随主进程
+                // 一起被杀掉；能 breakaway 时优先脱离 Job。
+                if (!CreateProcess(target, command, IntPtr.Zero, IntPtr.Zero, false,
+                    CreateBreakawayFromJob, IntPtr.Zero, workingDirectory, ref startup, out process))
+                {
+                    Log.Write("update handoff breakaway unavailable: " + Marshal.GetLastWin32Error());
+                    return false;
+                }
+                pid = process.dwProcessId;
+                CloseHandle(process.hThread);
+                CloseHandle(process.hProcess);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Log.Write("update handoff breakaway failed: " + exception.Message);
+                return false;
+            }
+        }
+
+        private const uint CreateBreakawayFromJob = 0x01000000;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct StartupInfo
+        {
+            public int cb;
+            public string lpReserved;
+            public string lpDesktop;
+            public string lpTitle;
+            public int dwX;
+            public int dwY;
+            public int dwXSize;
+            public int dwYSize;
+            public int dwXCountChars;
+            public int dwYCountChars;
+            public int dwFillAttribute;
+            public int dwFlags;
+            public short wShowWindow;
+            public short cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ProcessInformation
+        {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public int dwProcessId;
+            public int dwThreadId;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool CreateProcess(string applicationName, StringBuilder commandLine,
+            IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags,
+            IntPtr environment, string currentDirectory, ref StartupInfo startupInfo, out ProcessInformation processInformation);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
 
         private static string EscapePowerShell(string value)
         {

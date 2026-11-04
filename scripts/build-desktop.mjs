@@ -4,7 +4,6 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
-const packageVersion = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const helperProject = path.join(root, 'desktop', 'native', 'PiikAudio', 'PiikAudio.csproj');
 const helperOutput = path.join(root, 'desktop', 'bin');
 const helperExe = path.join(helperOutput, 'PiikAudio.exe');
@@ -36,6 +35,14 @@ function option(names) {
   }
   return '';
 }
+
+// 测试升级流程时用 --version=1.0.0 覆盖版本号，不动 package.json。
+const versionOverride = option(['version']);
+if (versionOverride && !/^\d+\.\d+\.\d+$/.test(versionOverride)) {
+  console.error('版本号格式不正确：' + versionOverride);
+  process.exit(1);
+}
+const packageVersion = versionOverride || JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 
 function parseServer(value) {
   const text = String(value || '').trim();
