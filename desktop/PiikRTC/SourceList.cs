@@ -450,7 +450,7 @@ namespace PiikRTC
                             frame.Release?.Invoke();
                             ready.Set();
                         },
-                        info => ready.Set());
+                        info => ready.Set(), captureCursor: false);
                     try
                     {
                         capture.Start();

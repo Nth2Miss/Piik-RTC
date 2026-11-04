@@ -109,6 +109,7 @@ namespace PiikRTC
         private readonly int _requestedWidth;
         private readonly int _requestedHeight;
         private readonly int _fps;
+        private readonly bool _captureCursor;
         private readonly Action<RawVideoFrame> _onFrame;
         private readonly Action<VideoEndedInfo> _onEnded;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -165,12 +166,13 @@ namespace PiikRTC
         public int Height { get; private set; }
 
         public WgcCapture(DesktopSource source, int width, int height, int fps,
-            Action<RawVideoFrame> onFrame, Action<VideoEndedInfo> onEnded)
+            Action<RawVideoFrame> onFrame, Action<VideoEndedInfo> onEnded, bool captureCursor = true)
         {
             _source = source ?? throw new ArgumentNullException(nameof(source));
             _requestedWidth = width;
             _requestedHeight = height;
             _fps = Math.Max(1, Math.Min(60, fps));
+            _captureCursor = captureCursor;
             _onFrame = onFrame ?? throw new ArgumentNullException(nameof(onFrame));
             _onEnded = onEnded ?? throw new ArgumentNullException(nameof(onEnded));
         }
@@ -193,7 +195,7 @@ namespace PiikRTC
                 _device, DirectXPixelFormat.B8G8R8A8UIntNormalized, 6, _poolSize);
             _framePool.FrameArrived += OnFrameArrived;
             _session = _framePool.CreateCaptureSession(_item);
-            _session.IsCursorCaptureEnabled = false;
+            _session.IsCursorCaptureEnabled = _captureCursor;
             try { _session.IsBorderRequired = false; } catch { /* older Windows versions always draw the border */ }
             _frameQueue = new BlockingCollection<Direct3D11CaptureFrame>(new ConcurrentQueue<Direct3D11CaptureFrame>(), 8);
             var queue = _frameQueue;

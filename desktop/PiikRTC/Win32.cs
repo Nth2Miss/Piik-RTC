@@ -27,6 +27,8 @@ namespace PiikRTC
         public const int DwmTnOpacity = 0x00000004;
         public const int DwmTnVisible = 0x00000008;
         public const int DwmTnSourceClientAreaOnly = 0x00000010;
+        public const int CursorShowing = 0x0001;
+        public const uint DiNormal = 0x0003;
 
         public delegate bool EnumWindowsProc(IntPtr window, IntPtr lParam);
 
@@ -118,6 +120,38 @@ namespace PiikRTC
 
         [DllImport("dwmapi.dll")]
         public static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorInfo(ref CursorInfo info);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetIconInfo(IntPtr icon, out IconInfo info);
+
+        [DllImport("user32.dll")]
+        public static extern bool DrawIconEx(IntPtr deviceContext, int x, int y, IntPtr icon, int width, int height, uint step, IntPtr flickerFreeBrush, uint flags);
+
+        [DllImport("gdi32.dll")]
+        public static extern bool DeleteObject(IntPtr obj);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CursorInfo
+        {
+            public int Size;
+            public int Flags;
+            public IntPtr Cursor;
+            public int X;
+            public int Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct IconInfo
+        {
+            public int IsIcon;
+            public int XHotspot;
+            public int YHotspot;
+            public IntPtr MaskBitmap;
+            public IntPtr ColorBitmap;
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         public struct Rect

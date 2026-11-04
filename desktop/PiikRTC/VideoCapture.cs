@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -81,6 +82,32 @@ namespace PiikRTC
             return Math.Max(2, value - (value % 2));
         }
 
+        private static readonly int CursorInfoSize = Marshal.SizeOf(typeof(Win32.CursorInfo));
+
+        // GDI screen/window copies never include the pointer, so draw the
+        // current system cursor onto the captured bitmap before scaling.
+        private static void DrawCursor(Graphics graphics, int offsetX, int offsetY, int width, int height)
+        {
+            var cursor = new Win32.CursorInfo { Size = CursorInfoSize };
+            if (!Win32.GetCursorInfo(ref cursor) || (cursor.Flags & Win32.CursorShowing) == 0 || cursor.Cursor == IntPtr.Zero) return;
+            var x = cursor.X - offsetX;
+            var y = cursor.Y - offsetY;
+            if (x < 0 || y < 0 || x >= width || y >= height) return;
+            Win32.IconInfo icon;
+            if (!Win32.GetIconInfo(cursor.Cursor, out icon)) return;
+            try
+            {
+                var deviceContext = graphics.GetHdc();
+                try { Win32.DrawIconEx(deviceContext, x - icon.XHotspot, y - icon.YHotspot, cursor.Cursor, 0, 0, 0, IntPtr.Zero, Win32.DiNormal); }
+                finally { graphics.ReleaseHdc(deviceContext); }
+            }
+            finally
+            {
+                if (icon.MaskBitmap != IntPtr.Zero) Win32.DeleteObject(icon.MaskBitmap);
+                if (icon.ColorBitmap != IntPtr.Zero) Win32.DeleteObject(icon.ColorBitmap);
+            }
+        }
+
         private void GetSourceSize(out int width, out int height)
         {
             width = 0;
@@ -144,6 +171,7 @@ namespace PiikRTC
                                 {
                                     var bounds = Screen.AllScreens[_source.ScreenIndex].Bounds;
                                     graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
+                                    DrawCursor(graphics, bounds.Left, bounds.Top, bounds.Width, bounds.Height);
                                 }
                             }
                             else
@@ -176,6 +204,10 @@ namespace PiikRTC
                                     {
                                         graphics.CopyFromScreen(rect.Left, rect.Top, 0, 0, new Size(rect.Width, rect.Height), CopyPixelOperation.SourceCopy);
                                     }
+                                }
+                                using (var graphics = Graphics.FromImage(source))
+                                {
+                                    DrawCursor(graphics, rect.Left, rect.Top, rect.Width, rect.Height);
                                 }
                             }
 
