@@ -45,6 +45,14 @@ export function attachRealtime(server, app, env = process.env, limits = REALTIME
     for (const client of clients) if (client.roomId === roomId) sendRoom(client);
   };
   app.locals.notifyRoom = (roomId, force = false) => broadcast(roomId, force);
+  app.locals.expelSession = key => {
+    if (closed || !key) return;
+    for (const client of clients) {
+      if (client.sessionKey !== key) continue;
+      client.roomId = undefined; client.sessionKey = undefined;
+      send(client, { type:'expired' });
+    }
+  };
 
   server.on('upgrade', (request, socket, head) => {
     const path = new URL(request.url, 'http://localhost').pathname;

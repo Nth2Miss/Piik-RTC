@@ -175,6 +175,20 @@ test('rejects duplicate names inside the same room', async t => {
   assert.equal((await guest(route, {})).status, 200);
   assert.equal((await guest('/api/profile', { name: '房主' })).status, 409);
 });
+test('a second tab from the same browser replaces the previous room session', async t => {
+  const { browser } = await server(t);
+  const tab = browser('同一个人');
+  const room = (await tab('/api/rooms', { name: '接管测试' })).data;
+  const route = `/api/rooms/${room.id}/token`;
+  const first = (await tab(route, {})).data;
+  const second = (await tab(route, {})).data;
+  assert.notEqual(first.uid, second.uid);
+  const presence = `/api/rooms/${room.id}/presence`;
+  assert.equal((await tab(presence, { sessionKey:first.sessionKey })).status, 403);
+  const { data } = await tab(presence, { sessionKey:second.sessionKey });
+  assert.equal(data.participants.length, 1);
+  assert.equal(data.participants[0].name, '同一个人');
+});
 test('all named users see the same room lobby without exposing creator credentials', async t => {
   const { owner, guest, stranger } = await server(t);
   const room = (await owner('/api/rooms', { name: '周末放映室', description: '一起看电影' })).data;

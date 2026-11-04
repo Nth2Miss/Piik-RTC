@@ -40,6 +40,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   app.locals.sessions = sessions;
   app.locals.lifecycle = lifecycle;
   app.locals.notifyRoom = () => {};
+  app.locals.expelSession = () => {};
   const configured = /^[a-f\d]{32}$/i.test(env.AGORA_APP_ID || '') && /^[a-f\d]{32}$/i.test(env.AGORA_APP_CERTIFICATE || '');
   const zegoId = Number(env.ZEGO_APP_ID);
   const zegoConfigured = Number.isInteger(zegoId) && zegoId > 0 && zegoId <= 0xffffffff && Buffer.byteLength(env.ZEGO_SERVER_SECRET || '') === 32;
@@ -206,6 +207,12 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     if (!session) {
       const invalid = usernameError(req.profile.name);
       if (invalid) return res.status(400).json({ error: invalid });
+      // The same identity keeps a single session per room: a new tab takes over, so a room never lists the name twice.
+      for (const [key, old] of sessions) {
+        if (old.roomId !== req.room.id || old.userId !== req.identity) continue;
+        sessions.delete(key);
+        app.locals.expelSession(key);
+      }
       if (duplicateName(req.room.id, req.identity, req.profile.name)) {
         return res.status(409).json({ error: `房间内已有用户名为「${req.profile.name}」的成员，请更换用户名后再进入。` });
       }
