@@ -11,6 +11,7 @@ import { volcToken } from './providers/volc/token.js';
 import { QuotaMonitor, QUOTA_RESERVE_MINUTES } from './quota/monitor.js';
 import { clientIp, logEvent, providerLabel, roomLabel } from './shared/log.js';
 import { compareVersions, effectiveClientVersion } from './shared/version.js';
+import { attachBotRoutes, PROVIDER_ORDER } from './bot/api.js';
 
 const secret = () => randomBytes(24).toString('base64url');
 const hour = 3600;
@@ -111,6 +112,27 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   };
   app.locals.participants = participants;
   app.locals.publicRoom = publicRoom;
+  const availableProviders = () => PROVIDER_ORDER.filter(provider => providers[provider]);
+  // 浏览器与 bot 接口共用创建规则，避免配额、名额和名称校验出现两套实现。
+  async function createRoomFor(identity, body, { defaultName = '', minVersion = null, requireProvider = false, initiator = null } = {}) {
+    const provider = body?.provider ?? (requireProvider ? '' : 'agora');
+    if (!provider) return { status: 400, error: '请选择 RTC 服务商。', providers: availableProviders() };
+    if (!Object.hasOwn(providers, provider)) return { status: 400, error: '不支持的 RTC 服务商。', providers: availableProviders() };
+    if (!providers[provider]) return { status: 503, error: '所选 RTC 服务商的服务端凭据尚未配置，或应用 ID 与已有用量记录不匹配。' };
+    const fields = roomFields(body, defaultName);
+    if (!fields) return { status: 400, error: '房间名称最多 40 字，描述最多 160 字。' };
+    const status = await monitor.check();
+    const remaining = status[provider];
+    if (remaining?.status === 'ok' && typeof remaining.remaining === 'number' && Number.isFinite(remaining.remaining) && remaining.remaining <= QUOTA_RESERVE_MINUTES) {
+      return { status: 403, error: '所选服务商剩余时长已达到 500 分钟保护线，请选择其他服务商。' };
+    }
+    lifecycle.sweep();
+    if (store.count(identity) >= 50) return { status: 429, error: '创建的房间太多，请关闭不用的房间。' };
+    const now = Date.now();
+    const room = { id: randomBytes(6).toString('hex'), ownerId: identity, initiator, inviteKey: secret(), provider, minVersion, ...fields, createdAt: now, updatedAt: now };
+    store.create(room);
+    return { room };
+  }
   function access(req, res, next) {
     lifecycle.sweep();
     const room = store.get(req.params.id);
@@ -126,6 +148,7 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
     req.session = session;
     next();
   }
+  attachBotRoutes(app, { env, providers, createRoomFor });
   app.get('/api/config', (_req, res) => res.json({ configured:Object.values(providers).some(Boolean), realtime:true, providers }));
   app.get('/api/service-status', async (_req, res) => res.json(await monitor.check()));
   app.get('/api/profile', (req, res) => res.json({ name: store.profile(req.identity)?.name || null }));
@@ -155,23 +178,10 @@ export function createApp(env = process.env, store = new RoomStore(), options = 
   });
   app.get('/api/rooms/:id', access, (req, res) => res.json(publicRoom(req.room, req.identity, req.clientVersion)));
   app.post('/api/rooms', async (req, res) => {
-    const provider = req.body?.provider ?? 'agora';
-    if (!Object.hasOwn(providers, provider)) return res.status(400).json({ error: '不支持的 RTC 服务商。' });
-    if (!providers[provider]) return res.status(503).json({ error: '所选 RTC 服务商的服务端凭据尚未配置，或应用 ID 与已有用量记录不匹配。' });
-    const fields = roomFields(req.body, req.profile.name);
-    if (!fields) return res.status(400).json({ error: '房间名称最多 40 字，描述最多 160 字。' });
-    const status = await monitor.check();
-    const remaining = status[provider];
-    if (remaining?.status === 'ok' && typeof remaining.remaining === 'number' && Number.isFinite(remaining.remaining) && remaining.remaining <= QUOTA_RESERVE_MINUTES) {
-      return res.status(403).json({ error: '所选服务商剩余时长已达到 500 分钟保护线，请选择其他服务商。' });
-    }
-    lifecycle.sweep();
-    if (store.count(req.identity) >= 50) return res.status(429).json({ error: '创建的房间太多，请关闭不用的房间。' });
-    const now = Date.now();
-    const room = { id: randomBytes(6).toString('hex'), ownerId: req.identity, inviteKey: secret(), provider, minVersion: req.clientVersion, ...fields, createdAt: now, updatedAt: now };
-    store.create(room);
-    logEvent('创建房间', { ip:clientIp(req), room:roomLabel(room), name:room.name, provider:providerLabel(provider) });
-    res.status(201).json(publicRoom(store.get(room.id), req.identity, req.clientVersion));
+    const result = await createRoomFor(req.identity, req.body, { defaultName: req.profile.name, minVersion: req.clientVersion });
+    if (!result.room) return res.status(result.status).json({ error: result.error, ...(result.providers ? { providers: result.providers } : {}) });
+    logEvent('创建房间', { ip:clientIp(req), room:roomLabel(result.room), name:result.room.name, provider:providerLabel(result.room.provider) });
+    res.status(201).json(publicRoom(store.get(result.room.id), req.identity, req.clientVersion));
   });
   app.patch('/api/rooms/:id', access, async (req, res) => {
     if (req.room.ownerId !== req.identity) return res.status(403).json({ error: '只有房主可以修改房间。' });

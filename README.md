@@ -76,6 +76,7 @@ npm run desktop:build -- --server=https://piik.example.com   # 内嵌并固定�
 | `scripts/desktop-dev.mjs` | 本地服务 + 桌面端开发启动 |
 | `scripts/vendor-piik.mjs` | 从上游重新导入 Piik |
 | `docs/desktop.md` | 桌面端架构、构建与限制 |
+| `docs/bot-api.md` | 给 Oopz bot 调用的 `/api/bot/*` 接口 |
 
 运行 `npm test` 验证房间、权限、媒体状态和实时同步逻辑。桌面端需要在 Windows 上实际验证程序/屏幕共享、程序声音和语音过滤；网页版使用桌面 Chrome / Edge 验证。
 

@@ -44,16 +44,21 @@ export class RoomStore {
     if (!columns.includes('provider')) this.db.exec("ALTER TABLE rooms ADD COLUMN provider TEXT NOT NULL DEFAULT 'agora'");
     if (!columns.includes('closeReason')) this.db.exec('ALTER TABLE rooms ADD COLUMN closeReason TEXT');
     if (!columns.includes('minVersion')) this.db.exec('ALTER TABLE rooms ADD COLUMN minVersion TEXT');
+    if (!columns.includes('initiator')) this.db.exec('ALTER TABLE rooms ADD COLUMN initiator TEXT');
     this.db.exec('UPDATE rooms SET emptySince = updatedAt, lastActiveAt = updatedAt WHERE lastActiveAt IS NULL');
   }
   create(room) {
-    this.db.prepare('INSERT INTO rooms (id,ownerId,name,description,inviteKey,createdAt,updatedAt,provider,minVersion) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(room.id, room.ownerId, room.name, room.description, room.inviteKey, room.createdAt, room.updatedAt, room.provider || 'agora', room.minVersion || null);
+    this.db.prepare('INSERT INTO rooms (id,ownerId,name,description,inviteKey,createdAt,updatedAt,provider,minVersion,initiator) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(room.id, room.ownerId, room.name, room.description, room.inviteKey, room.createdAt, room.updatedAt, room.provider || 'agora', room.minVersion || null, room.initiator || null);
     this.db.prepare('UPDATE rooms SET emptySince = ?, lastActiveAt = ? WHERE id = ?').run(room.createdAt, room.createdAt, room.id);
   }
   get(id) { return this.db.prepare('SELECT * FROM rooms WHERE id = ? AND archived = 0').get(id); }
   getAny(id) { return this.db.prepare('SELECT * FROM rooms WHERE id = ?').get(id); }
   all() { return this.db.prepare('SELECT * FROM rooms WHERE archived = 0 ORDER BY createdAt DESC, id').all(); }
+  findByInitiator(initiator) {
+    if (!initiator) return undefined;
+    return this.db.prepare('SELECT * FROM rooms WHERE archived = 0 AND initiator = ? ORDER BY createdAt DESC, id LIMIT 1').get(initiator);
+  }
   profile(id) { return this.db.prepare('SELECT name FROM visitors WHERE id = ?').get(id); }
   setProfile(id, name) { this.db.prepare('INSERT INTO visitors VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, updatedAt=excluded.updatedAt').run(id, name, Date.now()); }
   occupied(id, now) { this.db.prepare('UPDATE rooms SET emptySince = NULL, lastActiveAt = ? WHERE id = ?').run(now, id); }
