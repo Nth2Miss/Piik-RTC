@@ -172,6 +172,7 @@ export function createRoomService() {
   let quotaWatchdogBusy = false;
   let viewerIntentRevision = 0;
   let viewerExplicitlyCleared = false;
+  let leaving = false;
   let nativeEntryGate: ((provider: RtcProvider) => Promise<boolean>) | undefined;
   let versionEntryGate: ((room: Room) => Promise<boolean>) | undefined;
   function members(): Participant[] {
@@ -313,7 +314,7 @@ export function createRoomService() {
     remote:uid => client.remoteUsers.find(user => user.uid === uid),
     video:video => emit({ video }), empty:() => emit({ video:undefined }),
     error:error => {
-      if (viewerRecovery.running) recordIssue('viewer-recovery-subscribe', errorText(error));
+      if (viewerRecovery.running || leaving) recordIssue('viewer-recovery-subscribe', errorText(error));
       else notify(`切换画面失败：${errorText(error)}`, true);
     },
   });
@@ -556,16 +557,20 @@ export function createRoomService() {
     if (switchSource) void heartbeat();
   }
   async function leave() {
+    leaving = true;
     viewerRecovery.cancel();
     closeSocket();
     attempt++; revision++; clearInterval(heartbeatTimer); heartbeatTimer = undefined;
     cancelIdleDisconnect(); mediaIdle = false; source.setPaused(false);
     const room = state.room, key = sessionKey;
-    if (mediaLeaving) await mediaLeaving.catch(() => {});
-    await stop(false); await source.select(undefined);
-    cancelIdleDisconnect();
-    try { await client.leave(); }
+    try {
+      if (mediaLeaving) await mediaLeaving.catch(() => {});
+      await stop(false); await source.select(undefined);
+      cancelIdleDisconnect();
+      await client.leave();
+    }
     finally {
+      leaving = false;
       joined = false; participants = []; sessionKey = undefined; presenceSignature = ''; quotaLeaseAt = 0;
       if (room && key) await api(`/api/rooms/${room.id}/leave`, { sessionKey:key }).catch(() => {});
       history.replaceState(null, '', '/');
@@ -587,6 +592,7 @@ export function createRoomService() {
       if (!confirmed) return;
     }
     if (joined) await leave();
+    leaving = false;
     viewerRecovery.reset();
     viewerExplicitlyCleared = false;
     await client.setProvider(provider);

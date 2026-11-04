@@ -118,7 +118,7 @@ export class SourceController {
       if (revision !== this.revision) return;
       if (user.videoTrack) { this.playing = user.videoTrack; this.options.video(user.videoTrack); }
       await this.syncAudio(user, revision);
-    }).catch(error => { if (revision === this.revision) this.options.error(error); });
+    }).catch(error => { if (revision === this.revision && uid !== undefined) this.options.error(error); });
     return this.chain;
   }
   resumeAudio() { if (!this.paused) this.audioPlaying?.play(); }

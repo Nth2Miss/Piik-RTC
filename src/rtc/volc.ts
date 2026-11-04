@@ -12,6 +12,7 @@ export class VolcRtcAdapter implements RtcAdapter {
   private engine?: IRTCEngine;
   private sdk?: VolcModule;
   private uid = 0;
+  private roomReady = false;
   private remotes = new Map<number, RtcRemoteUser>();
   private localQuality = 0;
   private remoteQuality = new Map<number, number>();
@@ -49,6 +50,7 @@ export class VolcRtcAdapter implements RtcAdapter {
     // it so onRemoteStreamStats carries screen video and audio statistics.
     try { rtc.setParameter('UPLOAD_REMOTE_STATS', 'video,audio'); } catch { /* older SDK builds */ }
     const engine = this.engine = rtc.createEngine(String(appId));
+    this.roomReady = false;
     this.coldPublication = true; this.startupWatch = undefined;
     engine.on(rtc.events.onConnectionStateChanged, ({ state }) => {
       if (this.engine !== engine) return;
@@ -117,12 +119,27 @@ export class VolcRtcAdapter implements RtcAdapter {
       this.remoteQuality.set(id, Number(stats?.rxQuality) || 0);
       if ((stats?.isScreen || this.remotes.get(id)?.streamIndex === 0) && stats.videoStats) this.remoteScreen.set(id, { at:Date.now(), stats:{...stats.videoStats} });
     });
-    await engine.joinRoom(token, room, { userId:String(uid) }, { isAutoPublish:false, isAutoSubscribeAudio:false, isAutoSubscribeVideo:false });
+    try {
+      await engine.joinRoom(token, room, { userId:String(uid) }, { isAutoPublish:false, isAutoSubscribeAudio:false, isAutoSubscribeVideo:false });
+    } catch (error) {
+      // A halved join leaves the engine without its internal _room; every
+      // later subscribe/unsubscribe call would then throw inside the SDK.
+      if (this.engine === engine) {
+        this.engine = undefined; this.sdk = undefined; this.roomReady = false;
+        try { rtc.destroyEngine(engine); } catch { /* already destroyed */ }
+      }
+      throw error;
+    }
     if (this.engine !== engine) throw new Error('媒体连接已取消。');
+    this.roomReady = true;
     this.events.emit('connection-state-change', 'CONNECTED');
     return uid;
   }
   async leave() {
+    // Drop the ready flag before subscriptions.clear() runs the release
+    // callbacks: leaveRoom tears every subscription down anyway, and the SDK
+    // would otherwise touch its already-detached internal room state.
+    this.roomReady = false;
     this.revision++; this.subscriptions.clear();
     this.cancelStartup();
     const engine = this.engine, sdk = this.sdk; this.engine = undefined; this.sdk = undefined;
@@ -263,6 +280,10 @@ export class VolcRtcAdapter implements RtcAdapter {
   }
   async subscribe(user: RtcRemoteUser, kind: MediaKind, signal?: AbortSignal) {
     const { engine, sdk } = this.context();
+    // The SDK reads engine._room.remoteStreams without a null check in
+    // subscribeStream/subscribeScreen; calling it before joinRoom resolves or
+    // after leaveRoom would throw "Cannot read properties of undefined".
+    if (!this.roomReady) throw new Error('媒体连接尚未就绪，请稍后重试。');
     const publicationRevision = user.publicationRevision;
     const mediaType = kind === 'audio' ? sdk.MediaType.AUDIO : sdk.MediaType.VIDEO;
     await this.subscriptions.run(user, signal, () => user.streamIndex === 0 ? engine.subscribeStream(String(user.uid), mediaType) : engine.subscribeScreen(String(user.uid), mediaType), () => {
@@ -270,14 +291,15 @@ export class VolcRtcAdapter implements RtcAdapter {
       const track = engine.getRemoteStreamTrack(String(user.uid), user.streamIndex === 0 ? sdk.StreamIndex.STREAM_INDEX_MAIN : sdk.StreamIndex.STREAM_INDEX_SCREEN, kind);
       if (track) user.videoTrack = browserVideoTrack(track);
     }, () => {
-      if (this.engine === engine && user.publicationRevision === publicationRevision) return user.streamIndex === 0 ? engine.unsubscribeStream(String(user.uid), mediaType) : engine.unsubscribeScreen(String(user.uid), mediaType);
+      if (this.engine === engine && this.roomReady && user.publicationRevision === publicationRevision) return user.streamIndex === 0 ? engine.unsubscribeStream(String(user.uid), mediaType) : engine.unsubscribeScreen(String(user.uid), mediaType);
     });
   }
   async unsubscribe(user: RtcRemoteUser) {
     const publicationRevision = user.publicationRevision;
     this.subscriptions.cancel(user);
     user.audioTrack?.stop(); user.videoTrack?.stop();
-    if (this.engine && this.sdk && (user.hasVideo || user.hasAudio)) await (user.streamIndex === 0 ? this.engine.unsubscribeStream(String(user.uid), this.sdk.MediaType.AUDIO_AND_VIDEO) : this.engine.unsubscribeScreen(String(user.uid), this.sdk.MediaType.AUDIO_AND_VIDEO));
+    const engine = this.engine, sdk = this.sdk;
+    if (this.roomReady && engine && sdk && (user.hasVideo || user.hasAudio)) await (user.streamIndex === 0 ? engine.unsubscribeStream(String(user.uid), sdk.MediaType.AUDIO_AND_VIDEO) : engine.unsubscribeScreen(String(user.uid), sdk.MediaType.AUDIO_AND_VIDEO));
     if (user.publicationRevision !== publicationRevision) return;
     this.remoteScreen.delete(Number(user.uid));
     this.cache.delete(`volc:remote:${user.uid}`);
