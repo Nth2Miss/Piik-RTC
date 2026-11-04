@@ -46,6 +46,20 @@ test('bot 接口未配置 token 时禁用，错误 token 被拒绝', async t => 
   assert.equal((await bot('/api/bot/status', undefined, 'GET', { Authorization: '' })).status, 401);
 });
 
+test('bot 接口支持 X-Bot-Token，兼容反向代理的 Basic Auth', async t => {
+  const { base } = await server(t);
+  const response = await fetch(base + '/api/bot/status', { headers: { 'X-Bot-Token': token } });
+  assert.equal(response.status, 200);
+  const bad = await fetch(base + '/api/bot/status', { headers: { 'X-Bot-Token': 'wrong' } });
+  assert.equal(bad.status, 401);
+
+  // Authorization 被 Basic Auth 占用时，X-Bot-Token 仍然能通过。
+  const basic = await fetch(base + '/api/bot/status', {
+    headers: { Authorization: 'Basic ' + Buffer.from('user:pass').toString('base64'), 'X-Bot-Token': token },
+  });
+  assert.equal(basic.status, 200);
+});
+
 test('bot 状态返回可用服务商与用量', async t => {
   const { bot } = await server(t);
   const result = await bot('/api/bot/status');

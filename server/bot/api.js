@@ -23,8 +23,9 @@ export function attachBotRoutes(app, { env, providers, createRoomFor }) {
 
   router.use((req, res, next) => {
     if (!token) return res.status(503).json({ error: 'bot 接口未启用：服务端未配置 BOT_API_TOKEN。' });
+    // X-Bot-Token 让 Authorization 留给反向代理的 Basic Auth。
     const header = req.get('authorization') || '';
-    const provided = header.replace(/^Bearer\s+/i, '').trim();
+    const provided = (req.get('x-bot-token') || header.replace(/^Bearer\s+/i, '')).trim();
     if (!sameSecret(provided, token)) return res.status(401).json({ error: 'bot 鉴权失败。' });
     next();
   });
